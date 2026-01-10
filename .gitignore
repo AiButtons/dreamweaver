@@ -1,0 +1,39 @@
+# Common .gitignore for Dreamweaver Mono-repo
+
+# General
+.DS_Store
+*.pem
+.env*
+.vercel
+*.tsbuildinfo
+
+# Frontend (Next.js)
+dreamweaver-frontend/node_modules/
+dreamweaver-frontend/.pnp
+dreamweaver-frontend/.pnp.*
+dreamweaver-frontend/.yarn/*
+!dreamweaver-frontend/.yarn/patches
+!dreamweaver-frontend/.yarn/plugins
+!dreamweaver-frontend/.yarn/releases
+!dreamweaver-frontend/.yarn/versions
+dreamweaver-frontend/coverage/
+dreamweaver-frontend/.next/
+dreamweaver-frontend/out/
+dreamweaver-frontend/build/
+dreamweaver-frontend/npm-debug.log*
+dreamweaver-frontend/yarn-debug.log*
+dreamweaver-frontend/yarn-error.log*
+dreamweaver-frontend/.pnpm-debug.log*
+dreamweaver-frontend/next-env.d.ts
+
+# Backend (Python)
+dreamweaver-backend/__pycache__/
+dreamweaver-backend/*.py[oc]
+dreamweaver-backend/build/
+dreamweaver-backend/dist/
+dreamweaver-backend/wheels/
+dreamweaver-backend/*.egg-info
+dreamweaver-backend/.venv/
+dreamweaver-backend/.pytest_cache/
+dreamweaver-backend/.coverage
+dreamweaver-backend/htmlcov/
