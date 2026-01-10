@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { Check, ChevronRight, Image as ImageIcon, Minus, Pencil, Plus, Sparkles, Square, Camera, Upload, FileImage, Video as VideoIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CameraState } from "@/types";
@@ -61,14 +62,12 @@ const APERTURES = ["f/1.4", "f/2", "f/2.8", "f/4", "f/5.6", "f/8", "f/11", "f/16
 
 // Scrollable column component
 function ScrollableColumn({ items, selectedIndex, onSelect, label, renderItem }: {
-    items: { id: string; name: string; type?: string }[] | number[] | string[];
+    items: { id: string; name: string; type?: string }[];
     selectedIndex: number;
     onSelect: (index: number) => void;
     label: string;
-    renderItem: (item: unknown, isSelected: boolean) => React.ReactNode;
+    renderItem: (item: { id: string; name: string; type?: string }, isSelected: boolean) => React.ReactNode;
 }) {
-    const containerRef = useRef<HTMLDivElement>(null);
-
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault();
         const delta = e.deltaY > 0 ? 1 : -1;
@@ -79,11 +78,11 @@ function ScrollableColumn({ items, selectedIndex, onSelect, label, renderItem }:
     return (
         <div className="flex flex-col items-center">
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-3">{label}</span>
-            <div ref={containerRef} onWheel={handleWheel} className="h-40 overflow-hidden relative cursor-ns-resize select-none">
-                <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-card via-transparent to-card z-10" />
+            <div onWheel={handleWheel} className="h-40 overflow-hidden relative cursor-ns-resize select-none">
+                <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-[#1a1a1a] via-transparent to-[#1a1a1a] z-10" />
                 <div className="flex flex-col items-center transition-transform duration-200" style={{ transform: `translateY(${(2 - selectedIndex) * 40}px)` }}>
                     {items.map((item, i) => (
-                        <div key={typeof item === 'object' && item !== null && 'id' in item ? (item as { id: string }).id : String(item)}
+                        <div key={item.id}
                             className={cn("h-10 flex items-center justify-center px-3 transition-all cursor-pointer",
                                 i === selectedIndex ? "scale-110 text-foreground" : "scale-90 text-muted-foreground/50")}
                             onClick={() => onSelect(i)}>
@@ -92,15 +91,13 @@ function ScrollableColumn({ items, selectedIndex, onSelect, label, renderItem }:
                     ))}
                 </div>
             </div>
-            {typeof items[selectedIndex] === 'object' && items[selectedIndex] !== null && 'type' in (items[selectedIndex] as object) && (
+            {items[selectedIndex]?.type && (
                 <span className="text-[9px] font-medium text-muted-foreground mt-2 bg-muted/50 px-2 py-0.5 rounded">
-                    {(items[selectedIndex] as { type: string }).type}
+                    {items[selectedIndex].type}
                 </span>
             )}
             <span className="text-xs font-medium mt-1">
-                {typeof items[selectedIndex] === 'object' && items[selectedIndex] !== null && 'name' in (items[selectedIndex] as object)
-                    ? (items[selectedIndex] as { name: string }).name
-                    : String(items[selectedIndex])}
+                {items[selectedIndex]?.name}
                 {label === "FOCAL LENGTH" && " mm"}
             </span>
         </div>
@@ -128,14 +125,15 @@ export default function ImageGenerationPage() {
 
     const selectedModel = MODELS.find((m) => m.id === modelId) || MODELS[2];
     const selectedCamera = CAMERAS[cameraIndex];
-    const selectedLens = LENSES[lensIndex];
+
+    const focalItems = FOCAL_LENGTHS.map(f => ({ id: String(f), name: String(f) }));
+    const apertureItems = APERTURES.map(a => ({ id: a, name: a }));
 
     const handleGenerate = useCallback(async () => {
         setIsGenerating(true);
-        console.log("Generating:", { prompt, modelId, aspectRatio, batchSize, cameraState, camera: selectedCamera, lens: selectedLens, focal: FOCAL_LENGTHS[focalIndex], aperture: APERTURES[apertureIndex] });
         await new Promise((r) => setTimeout(r, 2000));
         setIsGenerating(false);
-    }, [prompt, modelId, aspectRatio, batchSize, cameraState, selectedCamera, selectedLens, focalIndex, apertureIndex]);
+    }, []);
 
     return (
         <TooltipProvider delayDuration={300}>
@@ -301,12 +299,15 @@ export default function ImageGenerationPage() {
                     </DialogContent>
                 </Dialog>
 
-                {/* Camera Equipment Modal */}
+                {/* Camera Equipment Modal - Fixed with DialogTitle and dark bg */}
                 <Dialog open={showEquipmentModal} onOpenChange={setShowEquipmentModal}>
-                    <DialogContent className="max-w-2xl">
+                    <DialogContent className="max-w-2xl bg-[#1a1a1a] border-border/50">
                         <DialogHeader>
+                            <VisuallyHidden>
+                                <DialogTitle>Camera Equipment</DialogTitle>
+                            </VisuallyHidden>
                             <div className="flex items-center gap-3">
-                                <span className="text-sm font-medium bg-muted px-3 py-1 rounded-full">All</span>
+                                <span className="text-sm font-medium bg-foreground text-background px-3 py-1 rounded-full">All</span>
                                 <span className="text-sm text-muted-foreground">Recommended</span>
                             </div>
                         </DialogHeader>
@@ -318,7 +319,7 @@ export default function ImageGenerationPage() {
                                     onSelect={setCameraIndex}
                                     label="CAMERA"
                                     renderItem={(item, isSelected) => (
-                                        <div className={cn("w-12 h-8 rounded bg-muted/50 flex items-center justify-center", isSelected && "bg-muted")}>
+                                        <div className={cn("w-14 h-10 rounded-lg bg-muted/30 border border-border/50 flex items-center justify-center", isSelected && "bg-muted border-muted-foreground/50")}>
                                             <Camera className="w-5 h-5" />
                                         </div>
                                     )}
@@ -329,31 +330,29 @@ export default function ImageGenerationPage() {
                                     onSelect={setLensIndex}
                                     label="LENS"
                                     renderItem={(item, isSelected) => (
-                                        <div className={cn("w-12 h-8 rounded bg-muted/50 flex items-center justify-center", isSelected && "bg-muted")}>
-                                            <div className="w-6 h-4 bg-muted-foreground/30 rounded" />
+                                        <div className={cn("w-14 h-10 rounded-lg bg-muted/30 border border-border/50 flex items-center justify-center", isSelected && "bg-muted border-muted-foreground/50")}>
+                                            <div className="w-6 h-4 bg-muted-foreground/50 rounded" />
                                         </div>
                                     )}
                                 />
                                 <ScrollableColumn
-                                    items={FOCAL_LENGTHS.map(f => ({ id: String(f), name: String(f) }))}
+                                    items={focalItems}
                                     selectedIndex={focalIndex}
                                     onSelect={setFocalIndex}
                                     label="FOCAL LENGTH"
                                     renderItem={(item, isSelected) => (
                                         <span className={cn("text-2xl font-bold tabular-nums", isSelected ? "text-foreground" : "text-muted-foreground/30")}>
-                                            {typeof item === 'object' && item !== null && 'name' in item ? (item as { name: string }).name : String(item)}
+                                            {item.name}
                                         </span>
                                     )}
                                 />
                                 <ScrollableColumn
-                                    items={APERTURES.map(a => ({ id: a, name: a }))}
+                                    items={apertureItems}
                                     selectedIndex={apertureIndex}
                                     onSelect={setApertureIndex}
                                     label="APERTURE"
                                     renderItem={(item, isSelected) => (
-                                        <div className="flex items-center gap-2">
-                                            <div className={cn("w-6 h-6 rounded-full border-2", isSelected ? "border-foreground" : "border-muted-foreground/30")} />
-                                        </div>
+                                        <div className={cn("w-8 h-8 rounded-full border-2", isSelected ? "border-foreground" : "border-muted-foreground/30")} />
                                     )}
                                 />
                             </div>
@@ -365,6 +364,9 @@ export default function ImageGenerationPage() {
                 <Dialog open={showDrawModal} onOpenChange={setShowDrawModal}>
                     <DialogContent className="max-w-lg">
                         <DialogHeader>
+                            <VisuallyHidden>
+                                <DialogTitle>Draw Tools</DialogTitle>
+                            </VisuallyHidden>
                             <Tabs value={drawTab} onValueChange={(v) => setDrawTab(v as typeof drawTab)} className="w-full">
                                 <TabsList className="grid w-full grid-cols-3 bg-muted/50">
                                     <TabsTrigger value="sketch" className="gap-1.5 text-xs data-[state=active]:bg-background">
