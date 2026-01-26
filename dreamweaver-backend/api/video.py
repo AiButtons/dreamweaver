@@ -29,6 +29,24 @@ class VideoGenerationResponse(BaseModel):
 async def generate_video(request: VideoGenerationRequest):
     """Generate video from visual parameters."""
     
+    # Upload start/end frames to S3 if provided as base64
+    start_frame_url = None
+    end_frame_url = None
+    
+    if request.start_frame and request.start_frame.startswith("data:image"):
+        try:
+            from utils.file_upload import upload_base64
+            start_frame_url = upload_base64(request.start_frame, "start_frame.jpg")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to upload start frame: {str(e)}")
+    
+    if request.end_frame and request.end_frame.startswith("data:image"):
+        try:
+            from utils.file_upload import upload_base64
+            end_frame_url = upload_base64(request.end_frame, "end_frame.jpg")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to upload end frame: {str(e)}")
+    
     # Build prompt with camera movement
     movement_prompts = {
         "static": "static camera",
@@ -43,7 +61,7 @@ async def generate_video(request: VideoGenerationRequest):
     full_prompt = f"{request.prompt or 'A cinematic scene'}. {movement_prompt}"
     
     # TODO: Implement actual video generation with Sora/Kling/etc
-    # For now, return mock response
+    # Use start_frame_url and end_frame_url for image-to-video
     return VideoGenerationResponse(
         id="mock-video-123",
         prompt=full_prompt,

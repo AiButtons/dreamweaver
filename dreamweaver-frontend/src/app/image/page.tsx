@@ -13,6 +13,7 @@ import { Check, ChevronRight, Image as ImageIcon, Minus, Pencil, Plus, Sparkles,
 import { cn } from "@/lib/utils";
 import type { CameraState } from "@/types";
 import { CameraSliders } from "@/components/camera/CameraSliders";
+import { FileUpload } from "@/components/upload/FileUpload";
 
 const CameraControl3D = dynamic(
     () => import("@/components/camera/CameraControl3D").then((mod) => mod.CameraControl3D),
@@ -21,13 +22,18 @@ const CameraControl3D = dynamic(
 
 // Model data
 const MODELS = [
-    { id: "higgsfield-soul", name: "Higgsfield Soul", description: "Ultra-Realistic Fashion Visuals", icon: "✧" },
-    { id: "higgsfield-face-swap", name: "Higgsfield Face Swap", description: "Seamless Face Swapping", icon: "⚡" },
+    { id: "zennah-image-gen", name: "Qwen Image", description: "Cinematic image generation with camera controls", icon: "🎬" },
+    { id: "zennah-qwen-edit", name: "Qwen Edit", description: "Consistent image editing with prompts", icon: "✏️" },
+
     { id: "nano-banana-pro", name: "Nano Banana Pro", description: "Google's Flagship Generation Model", icon: "G", selected: true },
     { id: "nano-banana", name: "Nano Banana", description: "Google's Standard Generation Model", icon: "G", premium: true },
     { id: "seedream-45", name: "Seedream 4.5", description: "ByteDance's Next-Gen 4K Image Model", icon: "📊", premium: true },
-    { id: "gpt-image-15", name: "GPT Image 1.5", description: "True-Color Precision Rendering", icon: "⚙", premium: true },
+    { id: "gpt-image-1", name: "GPT Image 1.5", description: "True-Color Precision Rendering", icon: "⚙", premium: true },
     { id: "z-image", name: "Z-Image", description: "Instant Lifelike Portraits", icon: "◇" },
+];
+
+const LORAS = [
+    { id: "zennah-qwen-multiview", name: "Qwen Multi-View", description: "Automatic 3-angle view generation", icon: "📐" },
 ];
 
 const ASPECT_RATIOS = [
@@ -106,7 +112,8 @@ function ScrollableColumn({ items, selectedIndex, onSelect, label, renderItem }:
 
 export default function ImageGenerationPage() {
     const [prompt, setPrompt] = useState("");
-    const [modelId, setModelId] = useState("nano-banana-pro");
+    const [modelId, setModelId] = useState("zennah-image-gen");
+    const [modelTab, setModelTab] = useState<"models" | "loras">("models");
     const [aspectRatio, setAspectRatio] = useState("1:1");
     const [batchSize, setBatchSize] = useState(1);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -123,31 +130,157 @@ export default function ImageGenerationPage() {
     const [focalIndex, setFocalIndex] = useState(2);
     const [apertureIndex, setApertureIndex] = useState(6);
 
-    const selectedModel = MODELS.find((m) => m.id === modelId) || MODELS[2];
+    // Advanced controls
+    const [showAdvancedModal, setShowAdvancedModal] = useState(false);
+    const [inferenceSteps, setInferenceSteps] = useState(35);
+    const [guidanceScale, setGuidanceScale] = useState(8.0);
+    const [seed, setSeed] = useState(42);
+
+    // Upload and generation state
+    const [uploadedImage, setUploadedImage] = useState<{ file: File; dataUrl: string } | null>(null);
+    const [generatedImages, setGeneratedImages] = useState<Array<{ url?: string; b64_json?: string }>>([]);
+
+    const allModels = [...MODELS, ...LORAS];
+    const selectedModel = allModels.find((m) => m.id === modelId) || MODELS[0];
     const selectedCamera = CAMERAS[cameraIndex];
 
     const focalItems = FOCAL_LENGTHS.map(f => ({ id: String(f), name: String(f) }));
     const apertureItems = APERTURES.map(a => ({ id: a, name: a }));
 
+    // Check if edit workflow (requires uploaded image)
+    const isEditWorkflow = modelId === "zennah-qwen-edit" || modelId === "zennah-qwen-multiview";
+
     const handleGenerate = useCallback(async () => {
+        if (!prompt.trim()) {
+            console.warn('No prompt provided');
+            return;
+        }
+
+        if (isEditWorkflow && !uploadedImage) {
+            alert('Please upload an image first for edit/multi-view workflows');
+            return;
+        }
+
         setIsGenerating(true);
-        await new Promise((r) => setTimeout(r, 2000));
-        setIsGenerating(false);
-    }, []);
+        try {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const endpoint = isEditWorkflow
+                ? `${apiUrl}/api/image/edit`
+                : `${apiUrl}/api/image/generate`;
+
+            const payload: any = {
+                prompt,
+                model_id: modelId,
+            };
+
+            if (isEditWorkflow && uploadedImage) {
+                payload.image = uploadedImage.dataUrl;
+                payload.extra_params = {
+                    n_steps: inferenceSteps,
+                    guidance_scale: guidanceScale,
+                    seed: seed,
+                    // Send camera state for multi-view generation
+                    azimuth: cameraState.azimuth,
+                    elevation: cameraState.elevation,
+                    distance: cameraState.distance,
+                };
+            } else {
+                payload.azimuth = cameraState.azimuth;
+                payload.elevation = cameraState.elevation;
+                payload.distance = cameraState.distance;
+                payload.camera_id = CAMERAS[cameraIndex].id;
+                payload.lens_id = LENSES[lensIndex].id;
+                payload.focal_length = FOCAL_LENGTHS[focalIndex];
+                payload.aperture = APERTURES[apertureIndex];
+                payload.aspect_ratio = aspectRatio;
+                payload.batch_size = batchSize;
+                payload.quality = "standard";
+                payload.n_steps = inferenceSteps;
+                payload.guidance_scale = guidanceScale;
+                payload.seed = seed;
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                console.error('Generation failed:', error);
+                alert(`Generation failed: ${error.detail || 'Unknown error'}`);
+                return;
+            }
+
+            const data = await response.json();
+            console.log('✅ Generated:', data);
+            setGeneratedImages(data.images || []);
+        } catch (error: any) {
+            console.error('Error generating image:', error);
+            alert('Failed to generate image. Check console for details.');
+        } finally {
+            setIsGenerating(false);
+        }
+    }, [prompt, modelId, uploadedImage, isEditWorkflow, cameraState, cameraIndex, lensIndex, focalIndex, apertureIndex, aspectRatio, batchSize, inferenceSteps, guidanceScale, seed]);
 
     return (
         <TooltipProvider delayDuration={300}>
             <div className="min-h-[calc(100vh-3.5rem)] bg-background flex flex-col">
                 {/* Main Content */}
-                <div className="flex-1 flex flex-col items-center justify-center px-4 py-12">
-                    <div className="relative mb-8">
-                        <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center">
-                            <ImageIcon className="w-12 h-12 text-primary" />
+                <div className="flex-1 overflow-y-auto px-4 py-12">
+                    {/* Upload Section for Edit Workflows */}
+                    {isEditWorkflow && !generatedImages.length && (
+                        <div className="max-w-2xl mx-auto mb-8">
+                            <div className="mb-4">
+                                <h3 className="text-lg font-semibold mb-1">Upload Base Image</h3>
+                                <p className="text-sm text-muted-foreground">
+                                    {modelId === "zennah-qwen-multiview"
+                                        ? "Upload an image to generate 3-angle multi-view composite"
+                                        : "Upload an image to edit with AI"}
+                                </p>
+                            </div>
+                            <FileUpload
+                                onFileUpload={(file, dataUrl) => setUploadedImage({ file, dataUrl })}
+                                onClear={() => setUploadedImage(null)}
+                                accept="image/*"
+                                maxSizeMB={10}
+                                disabled={isGenerating}
+                            />
                         </div>
-                        <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-primary animate-pulse" />
-                    </div>
-                    <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-center mb-4 uppercase">{selectedModel.name}</h1>
-                    <p className="text-muted-foreground text-center max-w-md">Create stunning, high-aesthetic images in seconds</p>
+                    )}
+
+                    {/* Generated Images Grid */}
+                    {generatedImages.length > 0 ? (
+                        <div className="max-w-4xl mx-auto">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-2xl font-bold">Generated Images</h2>
+                                <Button variant="outline" size="sm" onClick={() => setGeneratedImages([])}>Clear</Button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                {generatedImages.map((img, i) => {
+                                    const imgSrc = img.url || (img.b64_json ? `data:image/jpeg;base64,${img.b64_json}` : '');
+                                    return (
+                                        <div key={i} className="relative group">
+                                            <img src={imgSrc} alt={`Generated ${i + 1}`} className="w-full rounded-xl border border-border/50 shadow-lg" />
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ) : !isEditWorkflow && (
+                        /* Hero Section */
+                        <div className="flex flex-col items-center justify-center">
+                            <div className="relative mb-8">
+                                <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center">
+                                    <ImageIcon className="w-12 h-12 text-primary" />
+                                </div>
+                                <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-primary animate-pulse" />
+                            </div>
+                            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-center mb-4 uppercase">{selectedModel.name}</h1>
+                            <p className="text-muted-foreground text-center max-w-md">Create stunning, high-aesthetic images in seconds</p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Bottom Controls */}
@@ -159,7 +292,19 @@ export default function ImageGenerationPage() {
                                 <div className="absolute left-3 top-1/2 -translate-y-1/2">
                                     <Plus className="w-4 h-4 text-muted-foreground" />
                                 </div>
-                                <Input placeholder="Describe the scene you imagine" value={prompt} onChange={(e) => setPrompt(e.target.value)} className="pl-10 pr-4 h-12 bg-muted/50 border-border/50 text-base" />
+                                <Input
+                                    placeholder="Describe the scene you imagine"
+                                    value={prompt}
+                                    onChange={(e) => setPrompt(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey && prompt.trim() && !isGenerating) {
+                                            e.preventDefault();
+                                            handleGenerate();
+                                        }
+                                    }}
+                                    className="pl-10 pr-4 h-12 bg-muted/50 border-border/50 text-base"
+                                    disabled={isGenerating}
+                                />
                             </div>
                             <Button size="lg" className="h-12 px-6 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold" onClick={handleGenerate} disabled={isGenerating}>
                                 {isGenerating ? (<><div className="h-4 w-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin mr-2" /> Generating...</>) : "Generate"}
@@ -183,9 +328,14 @@ export default function ImageGenerationPage() {
                                     <TooltipContent>Select AI model</TooltipContent>
                                 </Tooltip>
                                 <PopoverContent align="start" className="w-80 p-2">
-                                    <div className="text-sm font-medium text-muted-foreground px-3 py-2">Select model</div>
+                                    <Tabs value={modelTab} onValueChange={(v) => setModelTab(v as "models" | "loras")} className="w-full">
+                                        <TabsList className="grid w-full grid-cols-2 mb-2">
+                                            <TabsTrigger value="models">Models</TabsTrigger>
+                                            <TabsTrigger value="loras">LoRAs</TabsTrigger>
+                                        </TabsList>
+                                    </Tabs>
                                     <div className="space-y-1 max-h-[350px] overflow-y-auto">
-                                        {MODELS.map((model) => (
+                                        {modelTab === "models" ? MODELS.map((model) => (
                                             <button key={model.id} onClick={() => setModelId(model.id)}
                                                 className={cn("w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-left", modelId === model.id ? "bg-muted" : "hover:bg-muted/50")}>
                                                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-sm font-bold text-primary">{model.icon}</span>
@@ -197,6 +347,16 @@ export default function ImageGenerationPage() {
                                                     <span className="text-xs text-muted-foreground">{model.description}</span>
                                                 </div>
                                                 {modelId === model.id && <Check className="w-4 h-4 text-primary" />}
+                                            </button>
+                                        )) : LORAS.map((lora) => (
+                                            <button key={lora.id} onClick={() => setModelId(lora.id)}
+                                                className={cn("w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-left", modelId === lora.id ? "bg-purple-500/20" : "hover:bg-muted/50")}>
+                                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/20 text-sm font-bold text-purple-400">{lora.icon}</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className="text-sm font-medium text-purple-400">{lora.name}</span>
+                                                    <span className="text-xs text-muted-foreground block">{lora.description}</span>
+                                                </div>
+                                                {modelId === lora.id && <Check className="w-4 h-4 text-purple-400" />}
                                             </button>
                                         ))}
                                     </div>

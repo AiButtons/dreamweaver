@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     fal_api_key: Optional[str] = None
     replicate_api_key: Optional[str] = None
+    modal_api_key: Optional[str] = None
+    
+    # Upload API settings
+    upload_api_endpoint: Optional[str] = None
+    upload_api_key: Optional[str] = None
+    upload_api_key_id: Optional[str] = None
     
     # Application settings
     debug: bool = False

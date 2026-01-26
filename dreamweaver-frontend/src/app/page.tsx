@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Image, Video, Wand2, Film, Sparkles, ArrowRight } from "lucide-react";
+import { Image, Video, Wand2, Film, Sparkles, ArrowRight, Workflow } from "lucide-react";
 
 const features = [
   {
@@ -35,6 +35,15 @@ const features = [
     href: "/cinema",
     color: "text-primary",
     bgColor: "bg-primary/10",
+    isNew: true,
+  },
+  {
+    title: "Storyboard",
+    description: "Plan and visualize complex narratives with a powerful node-based editor.",
+    icon: Workflow,
+    href: "/storyboard",
+    color: "text-orange-500",
+    bgColor: "bg-orange-500/10",
     isNew: true,
   },
 ];
@@ -154,8 +163,12 @@ export default function Home() {
                 </li>
               </ul>
             </div>
-            <div className="aspect-[4/3] rounded-xl bg-[#1a1a1a] border border-border flex items-center justify-center">
-              <p className="text-muted-foreground text-sm">3D Preview</p>
+            <div className="aspect-[4/3] rounded-xl bg-[#1a1a1a] border border-border flex items-center justify-center overflow-hidden">
+              <img
+                src="/camera_control.png"
+                alt="3D Camera Controls interface showing azimuth, elevation, and distance rings"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>

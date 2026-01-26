@@ -1,0 +1,37 @@
+/* Custom styles from StoryNodes index.html */
+
+/* Force specific background/text defaults for this route if needed, 
+   but respecting Next.js globals is better. 
+   ReactFlow override is critical. */
+
+.react-flow__node {
+    border: none !important;
+    border-radius: 16px !important;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1) !important;
+}
+
+.react-flow__handle {
+    width: 10px !important;
+    height: 10px !important;
+    background: #64748b !important;
+    border: 2px solid white !important;
+}
+
+/* Custom scrollbar */
+.storyboard-scroll ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.storyboard-scroll ::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.storyboard-scroll ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+.storyboard-scroll ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}

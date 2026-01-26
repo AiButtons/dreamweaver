@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Image as ImageIcon, Video, Wand2 } from "lucide-react";
+import { Image as ImageIcon, Video, Wand2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const NAV_ITEMS = [
     { href: "/image", label: "Image", icon: ImageIcon },
     { href: "/video", label: "Video", icon: Video },
     { href: "/edit", label: "Edit", icon: Wand2 },
+    { href: "/storyboard", label: "Storyboard", icon: Workflow },
 ];
 
 export function Navbar() {
