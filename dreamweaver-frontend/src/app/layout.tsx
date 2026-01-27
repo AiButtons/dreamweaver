@@ -28,9 +28,9 @@ export default function RootLayout({
           enableSystem={false}
           disableTransitionOnChange
         >
-          <div className="h-screen flex flex-col bg-background">
+          <div className="h-screen flex flex-col bg-background overflow-hidden">
             <Navbar />
-            <main className="flex-1 overflow-hidden relative">
+            <main className="flex-1 overflow-hidden">
               {children}
             </main>
           </div>

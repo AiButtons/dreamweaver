@@ -216,7 +216,7 @@ function AppContent() {
     };
 
     return (
-        <div className="flex h-full w-full overflow-hidden bg-white text-slate-900 font-sans storyboard-scroll">
+        <div className="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-white text-slate-900 font-sans storyboard-scroll">
             {/* Sidebar Chat */}
             <div className="w-80 h-full z-20 shadow-xl border-r border-gray-100 flex-shrink-0 bg-white">
                 <ChatPanel

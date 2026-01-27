@@ -129,6 +129,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -139,11 +140,11 @@
   .glass {
     @apply bg-white/5 backdrop-blur-xl border border-white/10;
   }
-  
+
   .glow-lime {
     box-shadow: 0 0 20px oklch(0.89 0.21 128 / 0.3);
   }
-  
+
   .text-gradient-lime {
     background: linear-gradient(135deg, oklch(0.89 0.21 128), oklch(0.75 0.18 128));
     -webkit-background-clip: text;
