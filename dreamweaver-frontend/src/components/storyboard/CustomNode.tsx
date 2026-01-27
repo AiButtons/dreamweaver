@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect } from 'react';
 import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
 import { StoryData } from '@/app/storyboard/types';
 import { PlayIcon, PauseIcon, PhotoIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
@@ -23,13 +23,26 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
     }));
   };
 
+  const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
+
+  // Auto-switch to video when it becomes available
+  useEffect(() => {
+    if (data.video) setActiveMedia('video');
+  }, [data.video]);
+
+  // If user manually switches to image, respect that loop unless new video comes
+  // (The above effect handles "new video" roughly, but simplistic is fine for now)
+
+  const showVideo = activeMedia === 'video' && data.video;
+  const showImage = !showVideo; // Fallback to image view (which might be empty placeholder)
+
   return (
     <div className={`w-[320px] bg-white rounded-2xl shadow-xl transition-all duration-200 overflow-hidden flex flex-col group ${selected ? 'ring-2 ring-blue-500 shadow-blue-100' : 'border border-gray-100'}`}>
       <Handle type="target" position={Position.Left} className="!bg-slate-400 !w-3 !h-3" />
 
       {/* Media Preview Area */}
       <div className="h-48 bg-slate-100 relative overflow-hidden group/media">
-        {data.video ? (
+        {showVideo ? (
           <video src={data.video} controls className="w-full h-full object-cover" />
         ) : data.image ? (
           <>
@@ -77,6 +90,23 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
                 {data.processingTask || 'Processing'}
               </span>
             </div>
+          </div>
+        )}
+        {/* Toggle Controls (if both exist) */}
+        {data.image && data.video && (
+          <div className="absolute top-2 right-2 flex bg-black/50 rounded-lg p-0.5 z-40 backdrop-blur-sm">
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveMedia('image'); }}
+              className={`p-1.5 rounded-md transition-all ${activeMedia === 'image' ? 'bg-white text-blue-600 shadow-sm' : 'text-white hover:bg-white/10'}`}
+            >
+              <PhotoIcon className="w-3 h-3" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveMedia('video'); }}
+              className={`p-1.5 rounded-md transition-all ${activeMedia === 'video' ? 'bg-white text-green-600 shadow-sm' : 'text-white hover:bg-white/10'}`}
+            >
+              <PlayIcon className="w-3 h-3" />
+            </button>
           </div>
         )}
       </div>

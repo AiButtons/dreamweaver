@@ -1,82 +1,55 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
 
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+import logging
+
+from providers.modal.video import ModalVideoProvider
+from providers.google.video import GoogleVideoProvider
 from config.settings import settings
 
-router = APIRouter()
+router = APIRouter(prefix="/api/video", tags=["video"])
 
+logger = logging.getLogger(__name__)
 
 class VideoGenerationRequest(BaseModel):
-    prompt: Optional[str] = None
-    start_frame: Optional[str] = None  # base64
-    end_frame: Optional[str] = None  # base64
-    duration: int = 5  # seconds
-    resolution: str = "1080p"
-    include_audio: bool = False
-    camera_movement: str = "static"
-    model_id: str = "sora-2"
+    prompt: str = Field(..., description="Text prompt for generation")
+    model_id: str = Field("ltx-2", description="Model ID (ltx-2 or veo-3.1)")
+    negative_prompt: Optional[str] = Field(None, description="Negative prompt")
+    start_image: Optional[str] = Field(None, description="Base64 or URL of start image")
+    end_image: Optional[str] = Field(None, description="Base64 or URL of end image")
+    aspect_ratio: str = Field("16:9", description="Aspect ratio (e.g. 16:9, 1:1)")
+    duration: str = Field("5", description="Duration in seconds (approx)")
+    camera_movement: str = Field("static", description="Camera movement type")
+    seed: Optional[int] = Field(42, description="Random seed")
+    
+    # Extra params from frontend
+    audio_enabled: bool = Field(False, description="Enable audio generation")
+    slow_motion: bool = Field(False, description="Enable slow motion")
+    
+    # Other potential params
+    batch_size: int = Field(1, description="Number of videos (usually 1)")
 
-
-class VideoGenerationResponse(BaseModel):
-    id: str
-    prompt: str
-    video_url: Optional[str] = None
-    status: str = "processing"
-
-
-@router.post("/generate", response_model=VideoGenerationResponse)
+@router.post("/generate")
 async def generate_video(request: VideoGenerationRequest):
-    """Generate video from visual parameters."""
-    
-    # Upload start/end frames to S3 if provided as base64
-    start_frame_url = None
-    end_frame_url = None
-    
-    if request.start_frame and request.start_frame.startswith("data:image"):
-        try:
-            from utils.file_upload import upload_base64
-            start_frame_url = upload_base64(request.start_frame, "start_frame.jpg")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to upload start frame: {str(e)}")
-    
-    if request.end_frame and request.end_frame.startswith("data:image"):
-        try:
-            from utils.file_upload import upload_base64
-            end_frame_url = upload_base64(request.end_frame, "end_frame.jpg")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to upload end frame: {str(e)}")
-    
-    # Build prompt with camera movement
-    movement_prompts = {
-        "static": "static camera",
-        "pan-left": "camera panning left",
-        "pan-right": "camera panning right",
-        "zoom-in": "camera slowly zooming in",
-        "zoom-out": "camera slowly zooming out",
-        "dolly-in": "camera dolly moving forward",
-    }
-    
-    movement_prompt = movement_prompts.get(request.camera_movement, "")
-    full_prompt = f"{request.prompt or 'A cinematic scene'}. {movement_prompt}"
-    
-    # TODO: Implement actual video generation with Sora/Kling/etc
-    # Use start_frame_url and end_frame_url for image-to-video
-    return VideoGenerationResponse(
-        id="mock-video-123",
-        prompt=full_prompt,
-        video_url=None,
-        status="Video generation not yet implemented. Configure API keys.",
-    )
-
-
-@router.get("/status/{video_id}")
-async def get_video_status(video_id: str):
-    """Get status of video generation job."""
-    # TODO: Implement actual status checking
-    return {
-        "id": video_id,
-        "status": "completed",
-        "progress": 100,
-        "video_url": None,
-    }
+    logger.info(f"📥 Received Video Generation Request: {request.dict()}")
+    try:
+        if request.model_id == "veo-3.1":
+            # Use Google Provider
+            provider = GoogleVideoProvider(api_key=None) # Add Vertex/Google key if available
+        else:
+            # Default to Modal LTX2
+            provider = ModalVideoProvider(api_key=settings.modal_api_key)
+        
+        # Convert Pydantic model to dict for provider
+        req_dict = request.dict()
+        
+        # Clean up
+        result = await provider.generate(req_dict)
+        return result
+        
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        logger.error(f"Video generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

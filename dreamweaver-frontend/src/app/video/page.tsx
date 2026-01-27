@@ -7,8 +7,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Check, Clock, Film, Image as ImageIcon, Minus, Play, Plus, Sparkles, Square, Upload, Video, Volume2, VolumeX } from "lucide-react";
+import { Camera, Film, Mic, MicOff, Play, Settings2, Square, Timer, Upload, X, ChevronRight, Check, Image as ImageIcon, Video, Plus, Clock, Volume2, VolumeX, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner"; // Assuming sonner is used, or alert
+
 
 // Camera movements
 const CAMERA_MOVEMENTS = [
@@ -27,15 +29,28 @@ const CAMERA_MOVEMENTS = [
 ];
 
 const ASPECT_RATIOS = [
+    { id: "16:9", label: "16:9" },
+    { id: "9:16", label: "9:16" },
     { id: "1:1", label: "1:1" },
+    { id: "21:9", label: "21:9" },
+    { id: "4:3", label: "4:3" },
     { id: "3:4", label: "3:4" },
     { id: "2:3", label: "2:3" },
-    { id: "9:16", label: "9:16" },
     { id: "3:2", label: "3:2" },
-    { id: "4:3", label: "4:3" },
-    { id: "16:9", label: "16:9", badge: "Cinematic" },
-    { id: "21:9", label: "21:9", badge: "Cinematic" },
 ];
+
+interface AspectRatio {
+    id: string;
+    label: string;
+    badge?: string;
+}
+
+const MODELS = [
+    { id: "ltx-2", name: "LTX-2", description: "Lightricks LTX Video Model", icon: "🎬", selected: true },
+    { id: "veo-3.1", name: "Veo 3.1", description: "Google DeepMind Veo Model", icon: "G" },
+];
+
+const LORAS: any[] = [];
 
 const DURATIONS = [
     { id: "5", label: "5s" },
@@ -45,6 +60,9 @@ const DURATIONS = [
 export default function VideoPage() {
     const [mode, setMode] = useState<"image" | "video">("video");
     const [prompt, setPrompt] = useState("");
+    const [negativePrompt, setNegativePrompt] = useState("");
+    const [modelId, setModelId] = useState("ltx-2");
+    const [modelTab, setModelTab] = useState<"models" | "loras">("models");
     const [cameraMovement, setCameraMovement] = useState("static");
     const [aspectRatio, setAspectRatio] = useState("16:9");
     const [duration, setDuration] = useState("5");
@@ -60,14 +78,57 @@ export default function VideoPage() {
     const [showEndFrameModal, setShowEndFrameModal] = useState(false);
     const [frameModalTab, setFrameModalTab] = useState<"recent" | "generations" | "liked">("generations");
 
+    const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
     const selectedMovement = CAMERA_MOVEMENTS.find((m) => m.id === cameraMovement) || CAMERA_MOVEMENTS[0];
 
     const handleGenerate = useCallback(async () => {
+        if (!prompt && !startFrame) {
+            toast.error("Please provide a prompt or start frame");
+            return;
+        }
+
         setIsGenerating(true);
-        console.log("Generating video:", { prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame });
-        await new Promise((r) => setTimeout(r, 3000));
-        setIsGenerating(false);
-    }, [prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame]);
+        setVideoUrl(null);
+
+        try {
+            const payload = {
+                prompt,
+                negative_prompt: negativePrompt,
+                model_id: modelId,
+                start_image: startFrame,
+                end_image: endFrame,
+                aspect_ratio: aspectRatio,
+                duration,
+                camera_movement: cameraMovement,
+                audio_enabled: audioEnabled,
+                slow_motion: slowMotion,
+                batch_size: batchSize
+            };
+
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/video/generate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || "Generation failed");
+            }
+
+            const data = await response.json();
+            if (data.url) {
+                setVideoUrl(data.url);
+                toast.success("Video generated successfully!");
+            }
+        } catch (error) {
+            console.error("Video generation failed:", error);
+            toast.error(error instanceof Error ? error.message : "Video generation failed");
+        } finally {
+            setIsGenerating(false);
+        }
+    }, [prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame, modelId]);
 
     const handleFileUpload = (type: "start" | "end") => {
         const input = document.createElement("input");
@@ -96,60 +157,106 @@ export default function VideoPage() {
     return (
         <TooltipProvider delayDuration={300}>
             <div className="min-h-[calc(100vh-3.5rem)] bg-background flex">
-                {/* Left Sidebar */}
-                <div className="w-16 border-r border-border/50 flex flex-col items-center py-4 gap-2">
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <button onClick={() => setMode("image")}
-                                className={cn("w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-colors",
-                                    mode === "image" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50")}>
-                                <ImageIcon className="w-5 h-5" />
-                                <span className="text-[10px] font-medium">Image</span>
-                            </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">Switch to Image generation</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <button onClick={() => setMode("video")}
-                                className={cn("w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-colors",
-                                    mode === "video" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50")}>
-                                <Video className="w-5 h-5" />
-                                <span className="text-[10px] font-medium">Video</span>
-                            </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">Switch to Video generation</TooltipContent>
-                    </Tooltip>
-                </div>
-
                 {/* Main Content */}
                 <div className="flex-1 flex flex-col">
                     {/* Preview */}
                     <div className="flex-1 flex flex-col items-center justify-center px-8 py-12">
-                        <div className="w-full max-w-3xl aspect-video rounded-xl bg-[#0f0f0f] border border-border/30 overflow-hidden flex items-center justify-center mb-8">
-                            {startFrame ? (
-                                <img src={startFrame} alt="Start frame" className="w-full h-full object-cover" />
+                        <div className="w-full max-w-4xl aspect-video rounded-xl bg-[#0f0f0f] border border-border/30 overflow-hidden flex items-center justify-center mb-0 relative group shadow-2xl">
+                            {isGenerating ? (
+                                <div className="absolute inset-0 flex items-center justify-center p-8 bg-black/50 backdrop-blur-sm">
+                                    <div className="flex items-center gap-6 w-full max-w-2xl px-8 relative">
+                                        {/* Start Frame */}
+                                        <div className="relative w-1/3 aspect-[16/9] rounded-lg overflow-hidden border-2 border-primary/30 shadow-2xl bg-black">
+                                            {startFrame ? (
+                                                <img src={startFrame} className="w-full h-full object-contain" alt="Start" />
+                                            ) : (
+                                                <div className="w-full h-full bg-muted/20 flex items-center justify-center">
+                                                    <span className="text-xs text-muted-foreground">Start</span>
+                                                </div>
+                                            )}
+                                            <div className="absolute inset-0 bg-primary/10 ring-1 ring-inset ring-primary/20" />
+                                        </div>
+
+                                        {/* Animated Transition */}
+                                        <div className="flex-1 flex flex-col items-center justify-center gap-2">
+                                            <div className="h-1 w-full bg-muted/20 rounded-full overflow-hidden relative">
+                                                <div className="absolute inset-y-0 left-0 w-1/3 bg-primary/80 blur-sm rounded-full animate-[shimmer_1.5s_infinite_linear]"
+                                                    style={{ content: '""', transform: 'translateX(-100%)', animationName: 'slide-right' }} />
+                                            </div>
+                                            <div className="flex gap-1">
+                                                <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                            </div>
+                                            <span className="text-xs font-mono text-primary/80 animate-pulse mt-1">MORPHING</span>
+                                        </div>
+
+                                        {/* End Frame */}
+                                        <div className="relative w-1/3 aspect-[16/9] rounded-lg overflow-hidden border-2 border-primary/30 shadow-2xl bg-black">
+                                            {endFrame ? (
+                                                <img src={endFrame} className="w-full h-full object-contain" alt="End" />
+                                            ) : (
+                                                <div className="w-full h-full bg-muted/20 flex items-center justify-center">
+                                                    <span className="text-xs text-muted-foreground">End</span>
+                                                </div>
+                                            )}
+                                            <div className="absolute inset-0 bg-primary/10 ring-1 ring-inset ring-primary/20" />
+                                        </div>
+                                    </div>
+
+                                    {/* Particles/Overlay */}
+                                    <div className="absolute inset-0 pointer-events-none opacity-20 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] bg-opacity-30 mix-blend-overlay" />
+                                </div>
+                            ) : videoUrl ? (
+                                <video src={videoUrl} controls className="w-full h-full object-contain" autoPlay loop />
+                            ) : startFrame ? (
+                                <img src={startFrame} alt="Start frame" className="w-full h-full object-contain" />
                             ) : (
-                                <div className="text-center text-muted-foreground">
-                                    <Play className="w-16 h-16 mx-auto mb-4 opacity-30" />
-                                    <p className="text-sm">Your video preview will appear here</p>
+                                <div className="text-center space-y-4 p-8">
+                                    <div className="mb-6 inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary/10 text-primary mb-6">
+                                        <Film className="w-10 h-10" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <p className="text-xs font-medium text-primary tracking-[0.2em] uppercase">EXPLORE FEATURES</p>
+                                        <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-white">CINEMA STUDIO</h1>
+                                        <p className="text-muted-foreground max-w-lg mx-auto text-sm leading-relaxed">
+                                            Professional-grade cinematic content powered by real camera and lens simulation.
+                                            <br />Upload a start frame to begin.
+                                        </p>
+                                    </div>
                                 </div>
                             )}
                         </div>
 
-                        <p className="text-xs font-medium text-primary tracking-widest uppercase mb-3">EXPLORE FEATURES</p>
-                        <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-center mb-4">CINEMA STUDIO</h1>
-                        <p className="text-muted-foreground text-center max-w-xl text-sm">
-                            Professional-grade cinematic content powered by real camera and lens simulation.
-                        </p>
+                        {/* Add keyframes for the custom animation if not in global css */}
+                        <style jsx global>{`
+                            @keyframes slide-right {
+                                0% { transform: translateX(-100%); }
+                                100% { transform: translateX(300%); }
+                            }
+                        `}</style>
+
                     </div>
 
                     {/* Bottom Controls */}
                     <div className="sticky bottom-0 border-t border-border/50 bg-card/95 backdrop-blur-xl p-4">
                         <div className="max-w-5xl mx-auto space-y-3">
-                            {/* Row 1: Prompt */}
-                            <div className="flex items-center gap-3">
-                                <Input placeholder="Upload image as a prompt or Describe the scene you imagine..." value={prompt} onChange={(e) => setPrompt(e.target.value)} className="flex-1 h-12 bg-muted/50 border-border/50 text-sm" />
+                            {/* Row 1: Prompts */}
+                            <div className="flex gap-3">
+                                <div className="flex-1 space-y-2">
+                                    <Input
+                                        placeholder="Describe the scene you imagine..."
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        className="h-12 bg-muted/50 border-border/50 text-sm"
+                                    />
+                                    <Input
+                                        placeholder="Negative prompt (e.g. blurry, distorted, low quality)..."
+                                        value={negativePrompt}
+                                        onChange={(e) => setNegativePrompt(e.target.value)}
+                                        className="h-10 bg-muted/30 border-border/30 text-xs text-muted-foreground"
+                                    />
+                                </div>
 
                                 <Tooltip>
                                     <TooltipTrigger asChild>
@@ -196,6 +303,49 @@ export default function VideoPage() {
 
                             {/* Row 2: Controls */}
                             <div className="flex items-center gap-2">
+                                {/* Model Selector */}
+                                <Popover>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <PopoverTrigger asChild>
+                                                <Button variant="outline" className="h-10 px-3 bg-primary/10 border-primary/30 hover:bg-primary/20 text-primary font-medium gap-1.5">
+                                                    <span className="text-sm font-bold">{MODELS.find(m => m.id === modelId)?.icon}</span>
+                                                    <span className="text-sm">{MODELS.find(m => m.id === modelId)?.name}</span>
+                                                    <ChevronRight className="w-3 h-3 opacity-60" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Select AI model</TooltipContent>
+                                    </Tooltip>
+                                    <PopoverContent align="start" className="w-80 p-2">
+                                        <Tabs value={modelTab} onValueChange={(v) => setModelTab(v as "models" | "loras")} className="w-full">
+                                            <TabsList className="grid w-full grid-cols-2 mb-2">
+                                                <TabsTrigger value="models">Models</TabsTrigger>
+                                                <TabsTrigger value="loras">LoRAs</TabsTrigger>
+                                            </TabsList>
+                                        </Tabs>
+                                        <div className="space-y-1 max-h-[350px] overflow-y-auto">
+                                            {modelTab === "models" ? MODELS.map((model) => (
+                                                <button key={model.id} onClick={() => setModelId(model.id)}
+                                                    className={cn("w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-left", modelId === model.id ? "bg-muted" : "hover:bg-muted/50")}>
+                                                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-sm font-bold text-primary">{model.icon}</span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-sm font-medium">{model.name}</span>
+                                                        </div>
+                                                        <span className="text-xs text-muted-foreground">{model.description}</span>
+                                                    </div>
+                                                    {modelId === model.id && <Check className="w-4 h-4 text-primary" />}
+                                                </button>
+                                            )) : (
+                                                <div className="p-4 text-center text-sm text-muted-foreground">
+                                                    No LoRAs available for video generation yet.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+
                                 {/* Movements - shows selected movement */}
                                 <Tooltip>
                                     <TooltipTrigger asChild>
@@ -222,7 +372,7 @@ export default function VideoPage() {
                                     </Tooltip>
                                     <PopoverContent align="start" className="w-56 p-2">
                                         <div className="space-y-0.5">
-                                            {ASPECT_RATIOS.map((ar) => (
+                                            {(ASPECT_RATIOS as AspectRatio[]).map((ar) => (
                                                 <button key={ar.id} onClick={() => setAspectRatio(ar.id)}
                                                     className={cn("w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left",
                                                         aspectRatio === ar.id ? "bg-muted" : "hover:bg-muted/50")}>
@@ -338,6 +488,7 @@ export default function VideoPage() {
                 <Dialog open={showStartFrameModal} onOpenChange={setShowStartFrameModal}>
                     <DialogContent className="max-w-2xl">
                         <DialogHeader>
+                            <DialogTitle>Select Start Frame</DialogTitle>
                             <Tabs value={frameModalTab} onValueChange={(v) => setFrameModalTab(v as typeof frameModalTab)} className="w-full">
                                 <TabsList className="bg-transparent border-b border-border rounded-none p-0 h-auto">
                                     <TabsTrigger value="recent" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2">Recently attached</TabsTrigger>
@@ -360,6 +511,7 @@ export default function VideoPage() {
                 <Dialog open={showEndFrameModal} onOpenChange={setShowEndFrameModal}>
                     <DialogContent className="max-w-2xl">
                         <DialogHeader>
+                            <DialogTitle>Select End Frame</DialogTitle>
                             <Tabs value={frameModalTab} onValueChange={(v) => setFrameModalTab(v as typeof frameModalTab)} className="w-full">
                                 <TabsList className="bg-transparent border-b border-border rounded-none p-0 h-auto">
                                     <TabsTrigger value="recent" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2">Recently attached</TabsTrigger>

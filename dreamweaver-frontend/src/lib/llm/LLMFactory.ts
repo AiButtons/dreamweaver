@@ -4,9 +4,12 @@ import { SunoProvider } from "./providers/SunoProvider";
 import { LLMProvider, ContentGenerationConfig, ImageGenerationConfig, AudioGenerationConfig, VideoGenerationConfig } from "./types";
 import { ModalImageProvider } from "./providers/ModalImageProvider";
 
+import { ModalVideoProvider, ModalVideoConfig } from "./providers/ModalVideoProvider";
+
 class UnifiedProvider implements LLMProvider {
   private gemini: GeminiProvider;
   private modalImage: ModalImageProvider;
+  private modalVideo: ModalVideoProvider;
   private elevenLabs?: ElevenLabsProvider;
   private suno?: SunoProvider;
 
@@ -15,6 +18,7 @@ class UnifiedProvider implements LLMProvider {
     if (!geminiKey) throw new Error("GEMINI_API_KEY is not set");
     this.gemini = new GeminiProvider(geminiKey);
     this.modalImage = new ModalImageProvider();
+    this.modalVideo = new ModalVideoProvider();
 
     const elevenKey = process.env.ELEVENLABS_API_KEY;
     if (elevenKey) this.elevenLabs = new ElevenLabsProvider(elevenKey);
@@ -36,7 +40,7 @@ class UnifiedProvider implements LLMProvider {
   }
 
   async generateVideo(prompt: string, config?: VideoGenerationConfig): Promise<string> {
-    return this.gemini.generateVideo(prompt, config);
+    return this.modalVideo.generateVideo(prompt, config as ModalVideoConfig);
   }
 
   async generateAudio(text: string, config?: AudioGenerationConfig): Promise<string> {

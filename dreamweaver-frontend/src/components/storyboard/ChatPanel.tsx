@@ -18,8 +18,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   selectedNode,
   onClearSelection
 }) => {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState('A group of friends enters a haunted mansion, each taking a different hallway that leads to strange encounters before they reunite.');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [input]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -52,8 +60,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           >
             <div
               className={`max-w-[90%] rounded-2xl px-5 py-3 text-sm leading-relaxed shadow-sm ${msg.role === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-none'
-                  : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'
+                ? 'bg-blue-600 text-white rounded-br-none'
+                : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'
                 }`}
             >
               {msg.content}
@@ -85,18 +93,26 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
 
         <form onSubmit={handleSubmit} className="p-4 pt-2">
           <div className="relative shadow-sm rounded-xl">
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
               placeholder={selectedNode ? `Edit "${selectedNode.data.label}"...` : "Type a story prompt or instruction..."}
               disabled={isGenerating}
-              className={`w-full bg-gray-50 text-gray-900 placeholder-gray-400 rounded-xl pl-4 pr-12 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-200 disabled:opacity-50 transition-all ${selectedNode ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/30' : ''}`}
+              className={`w-full bg-gray-50 text-gray-900 placeholder-gray-400 rounded-xl pl-4 pr-12 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-200 disabled:opacity-50 transition-all resize-none overflow-hidden min-h-[46px] max-h-[200px] ${selectedNode ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/30' : ''}`}
             />
             <button
               type="submit"
               disabled={!input.trim() || isGenerating}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-blue-600 hover:text-blue-700 disabled:text-gray-400 transition-colors"
+              className="absolute right-2 bottom-2 p-2 text-blue-600 hover:text-blue-700 disabled:text-gray-400 transition-colors"
             >
               <PaperAirplaneIcon className="w-5 h-5" />
             </button>

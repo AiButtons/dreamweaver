@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     fal_api_key: Optional[str] = None
     replicate_api_key: Optional[str] = None
     modal_api_key: Optional[str] = None
+    google_api_key: Optional[str] = None
+    google_project_id: Optional[str] = None
     
     # Upload API settings
     upload_api_endpoint: Optional[str] = None
