@@ -14,6 +14,16 @@ async def lifespan(app: FastAPI):
     print(f"🚀 Dreamweaver API starting...")
     print(f"📍 OpenAI API Key configured: {'Yes' if settings.openai_api_key else 'No'}")
     
+    # Debug: Print allowed origins
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://dreamweaver-s6j9.vercel.app",
+    ]
+    print(f"🌍 Allowed Origins: {origins}")
+    
     # Initialize providers
     initialize_providers()
     
@@ -25,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Dreamweaver API",
     description="Visual prompting API for AI image and video generation",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
@@ -50,7 +60,7 @@ app.include_router(api_router, prefix="/api")
 
 @app.get("/")
 async def root():
-    return {"message": "Dreamweaver API", "version": "0.1.0"}
+    return {"message": "Dreamweaver API", "version": "0.1.1"}
 
 
 @app.get("/health")
