@@ -109,7 +109,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, nodes =
             </button>
          </div>
 
-         <div className="px-4 pb-4">
+         <div className="px-4 pb-4 max-h-[calc(100vh-200px)] overflow-y-auto">
             {activeTab === 'MEDIA' ? (
                <div className="space-y-4">
                   {/* Type Selector */}
@@ -207,16 +207,34 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, nodes =
                                        </div>
                                     ) : (
                                        <>
-                                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Input Image (Optional)</label>
-                                          <FileUpload
-                                             onFileUpload={(file, dataUrl) => setInputImage({ file, dataUrl })}
-                                             onClear={() => setInputImage(null)}
-                                             accept="image/*"
-                                             maxSizeMB={5}
-                                             className="mb-2"
-                                          />
+                                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Input Image (Optional)</label>
+                                          {inputImage ? (
+                                             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mb-2">
+                                                <img src={inputImage.dataUrl} alt="Input" className="w-10 h-10 rounded object-cover" />
+                                                <span className="flex-1 text-xs text-gray-600 truncate">{inputImage.file.name}</span>
+                                                <button onClick={() => setInputImage(null)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+                                             </div>
+                                          ) : (
+                                             <label className="flex items-center justify-center gap-2 py-2 px-3 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 hover:border-gray-300 transition-colors mb-2">
+                                                <PhotoIcon className="w-4 h-4 text-gray-400" />
+                                                <span className="text-xs text-gray-500">Upload Image</span>
+                                                <input
+                                                   type="file"
+                                                   accept="image/*"
+                                                   className="hidden"
+                                                   onChange={(e) => {
+                                                      const file = e.target.files?.[0];
+                                                      if (file) {
+                                                         const reader = new FileReader();
+                                                         reader.onload = (ev) => setInputImage({ file, dataUrl: ev.target?.result as string });
+                                                         reader.readAsDataURL(file);
+                                                      }
+                                                   }}
+                                                />
+                                             </label>
+                                          )}
                                           {data.image && (
-                                             <div className='flex items-center justify-end mt-1'>
+                                             <div className='flex items-center justify-end'>
                                                 <button
                                                    onClick={() => {
                                                       setInputImage(null);

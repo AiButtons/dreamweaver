@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
     useNodesState,
     useEdgesState,
@@ -45,6 +45,51 @@ function AppContent() {
     const [isProcessing, setIsProcessing] = useState(false);
 
     const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
+
+    // Calculate panel position based on selected node
+    const panelPosition = useMemo(() => {
+        if (!selectedNode || !rfInstance) return { top: 8, right: 80 };
+
+        const viewport = rfInstance.getViewport();
+        const nodeWidth = 320; // CustomNode width
+        const panelWidth = 340;
+        const panelHeight = 600; // Approximate max height
+        const padding = 16;
+
+        // Convert node position to screen coordinates
+        const screenX = selectedNode.position.x * viewport.zoom + viewport.x;
+        const screenY = selectedNode.position.y * viewport.zoom + viewport.y;
+
+        // Default: position to the right of the node
+        let left = screenX + nodeWidth * viewport.zoom + padding;
+        let top = screenY;
+
+        // Get viewport dimensions (approximate canvas area)
+        const viewportWidth = window.innerWidth - 320; // minus sidebar
+        const viewportHeight = window.innerHeight - 56; // minus navbar
+
+        // Check right overflow - flip to left if needed
+        if (left + panelWidth > viewportWidth) {
+            left = screenX - panelWidth - padding;
+        }
+
+        // Check left underflow
+        if (left < padding) {
+            left = padding;
+        }
+
+        // Check bottom overflow - move up if needed
+        if (top + panelHeight > viewportHeight) {
+            top = Math.max(padding, viewportHeight - panelHeight);
+        }
+
+        // Check top underflow
+        if (top < padding) {
+            top = padding;
+        }
+
+        return { top, left };
+    }, [selectedNode, rfInstance]);
 
     const onConnect: OnConnect = useCallback(
         (params: Connection) => setEdges((eds) => addEdge(params, eds)),
@@ -253,7 +298,14 @@ function AppContent() {
 
                 {/* Floating Properties Card */}
                 {selectedNode && (
-                    <div className="absolute top-6 right-20 z-30">
+                    <div
+                        className="absolute z-30"
+                        style={{
+                            top: panelPosition.top,
+                            left: panelPosition.left !== undefined ? panelPosition.left : undefined,
+                            right: panelPosition.left === undefined ? 80 : undefined
+                        }}
+                    >
                         <PropertiesPanel
                             selectedNode={selectedNode}
                             nodes={nodes}
