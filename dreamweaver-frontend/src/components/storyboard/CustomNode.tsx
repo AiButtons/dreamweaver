@@ -1,20 +1,59 @@
 import React, { memo } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
 import { StoryData } from '@/app/storyboard/types';
-import { PlayIcon, PauseIcon, PhotoIcon } from '@heroicons/react/24/solid';
+import { PlayIcon, PauseIcon, PhotoIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
 
-const CustomNode = ({ data, selected }: NodeProps<StoryData>) => {
+const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
+  const { setNodes } = useReactFlow();
+
+  const history = data.imageHistory || [];
+  const currentIndex = data.image ? history.indexOf(data.image) : -1;
+  const hasPrev = currentIndex > 0;
+  const hasNext = currentIndex !== -1 && currentIndex < history.length - 1;
+
+  const handleNav = (e: React.MouseEvent, direction: 'prev' | 'next') => {
+    e.stopPropagation();
+    const newIndex = direction === 'prev' ? currentIndex - 1 : currentIndex + 1;
+    const newImage = history[newIndex];
+    setNodes((nds) => nds.map((n) => {
+      if (n.id === id) {
+        return { ...n, data: { ...n.data, image: newImage } };
+      }
+      return n;
+    }));
+  };
+
   return (
     <div className={`w-[320px] bg-white rounded-2xl shadow-xl transition-all duration-200 overflow-hidden flex flex-col group ${selected ? 'ring-2 ring-blue-500 shadow-blue-100' : 'border border-gray-100'}`}>
       <Handle type="target" position={Position.Left} className="!bg-slate-400 !w-3 !h-3" />
 
       {/* Media Preview Area */}
-      <div className="h-48 bg-slate-100 relative overflow-hidden">
+      <div className="h-48 bg-slate-100 relative overflow-hidden group/media">
         {data.video ? (
           <video src={data.video} controls className="w-full h-full object-cover" />
         ) : data.image ? (
           <>
             <img src={data.image} alt={data.label} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+
+            {/* History Navigation */}
+            {(hasPrev || hasNext) && (
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between px-2 opacity-0 group-hover/media:opacity-100 transition-opacity z-30">
+                <button
+                  onClick={(e) => hasPrev && handleNav(e, 'prev')}
+                  className={`p-1 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors ${!hasPrev ? 'invisible' : ''}`}
+                >
+                  <ChevronLeftIcon className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={(e) => hasNext && handleNav(e, 'next')}
+                  className={`p-1 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors ${!hasNext ? 'invisible' : ''}`}
+                >
+                  <ChevronRightIcon className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+
+            {/* Input Overlay */}
             {data.inputImage && (
               <div className="absolute bottom-2 left-2 w-20 h-20 rounded-lg border-2 border-white shadow-lg overflow-hidden z-20 hover:scale-110 transition-transform cursor-pointer" title="Input Image">
                 <img src={data.inputImage} alt="Input" className="w-full h-full object-cover" />

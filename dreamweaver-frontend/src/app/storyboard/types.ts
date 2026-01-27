@@ -4,6 +4,7 @@ export interface StoryData {
   label: string;
   segment: string;
   image?: string;
+  imageHistory?: string[];
   inputImage?: string;
   audio?: string;
   video?: string;

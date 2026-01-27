@@ -129,11 +129,15 @@ class ModalImageProvider(ImageProvider):
             # Generate JWT token
             token = self._generate_jwt_token()
             
+            # Extract width/height from extra_params or use defaults
+            width = request.extra_params.get("width") or self.DEFAULT_WIDTH
+            height = request.extra_params.get("height") or self.DEFAULT_HEIGHT
+
             # Build payload
             payload = {
                 "prompt": full_prompt,
-                "width": self.DEFAULT_WIDTH,
-                "height": self.DEFAULT_HEIGHT,
+                "width": width,
+                "height": height,
                 "n_steps": steps,
                 "guidance_scale": guidance,
             }

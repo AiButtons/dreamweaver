@@ -182,7 +182,27 @@ function AppContent() {
                 updateNodeData(nodeId, { inputImage: config.inputImage });
             }
             const resultUrl = await generateMedia(type, prompt, config);
-            if (type === MediaType.IMAGE) updateNodeData(nodeId, { image: resultUrl });
+            if (type === MediaType.IMAGE) {
+                // Update history with new image
+                setNodes((nds) => nds.map((node) => {
+                    if (node.id === nodeId) {
+                        const oldHistory = node.data.imageHistory || [];
+                        // Ensure existing image is in history if this is the first time adding history
+                        const historyWithLegacy = (oldHistory.length === 0 && node.data.image)
+                            ? [node.data.image]
+                            : oldHistory;
+
+                        const newHistory = [...historyWithLegacy, resultUrl];
+                        const newData = { ...node.data, image: resultUrl, imageHistory: newHistory };
+
+                        if (selectedNode?.id === nodeId) {
+                            setSelectedNode({ ...node, data: newData });
+                        }
+                        return { ...node, data: newData };
+                    }
+                    return node;
+                }));
+            }
             if (type === MediaType.AUDIO) updateNodeData(nodeId, { audio: resultUrl });
             if (type === MediaType.VIDEO) updateNodeData(nodeId, { video: resultUrl });
 

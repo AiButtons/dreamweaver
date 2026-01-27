@@ -29,6 +29,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, onGener
    const [voice, setVoice] = useState<VoiceName>('Kore');
    const [aspectRatio, setAspectRatio] = useState('16:9');
    const [inputImage, setInputImage] = useState<{ file: File; dataUrl: string } | null>(null);
+   const [showUpload, setShowUpload] = useState(false);
 
    if (!selectedNode) return null;
    const { data, id } = selectedNode;
@@ -37,7 +38,15 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, onGener
       // Determine config based on type
       let config: any = {};
       if (mediaType === MediaType.AUDIO) config = { voice };
-      if (mediaType === MediaType.IMAGE) config = { style, aspectRatio, inputImage: inputImage?.dataUrl };
+      if (mediaType === MediaType.IMAGE) {
+         // Determine effective input image
+         // If explicit upload exists, use it.
+         // If NO explicit upload, and we are NOT showing upload (meaning default view), use generated image.
+         // If we are showing upload but it's empty, send undefined (no input).
+         const effectiveInputImage = inputImage?.dataUrl || (!showUpload && data.image ? data.image : undefined);
+
+         config = { style, aspectRatio, inputImage: effectiveInputImage };
+      }
       if (mediaType === MediaType.VIDEO) config = { style, aspectRatio };
 
       // Use specific prompt or fall back to segment text
@@ -144,20 +153,71 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, onGener
                               />
                            </div>
                            <div>
-                              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Input Image (Optional)</label>
-                              <FileUpload
-                                 onFileUpload={(file, dataUrl) => setInputImage({ file, dataUrl })}
-                                 onClear={() => setInputImage(null)}
-                                 accept="image/*"
-                                 maxSizeMB={5}
-                                 className="mb-2"
-                              />
+                              {data.image && !inputImage && !showUpload ? (
+                                 <div className="relative rounded-lg border border-gray-200 overflow-hidden bg-gray-50 mb-2">
+                                    <div className="relative aspect-video bg-black/5 group">
+                                       <img
+                                          src={data.image}
+                                          alt="Generated Input"
+                                          className="w-full h-full object-contain"
+                                       />
+                                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+                                    </div>
+                                    <div className="p-2 border-t border-gray-200 bg-white">
+                                       <div className="flex items-center gap-2 mb-2">
+                                          <SparklesIcon className="w-3 h-3 text-purple-500" />
+                                          <span className="text-[10px] font-medium text-gray-600">Using Generated Image</span>
+                                       </div>
+                                       <button
+                                          onClick={() => setShowUpload(true)}
+                                          className="w-full py-1.5 px-3 bg-white border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-200 rounded-md text-[10px] font-medium transition-all shadow-sm flex items-center justify-center gap-1"
+                                       >
+                                          <PhotoIcon className="w-3 h-3" />
+                                          Upload Different Image
+                                       </button>
+                                    </div>
+                                 </div>
+                              ) : (
+                                 <>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Input Image (Optional)</label>
+                                    <FileUpload
+                                       onFileUpload={(file, dataUrl) => setInputImage({ file, dataUrl })}
+                                       onClear={() => setInputImage(null)}
+                                       accept="image/*"
+                                       maxSizeMB={5}
+                                       className="mb-2"
+                                    />
+                                    {data.image && (
+                                       <div className='flex items-center justify-end mt-1'>
+                                          <button
+                                             onClick={() => {
+                                                setInputImage(null);
+                                                setShowUpload(false);
+                                             }}
+                                             className="text-[10px] text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-colors"
+                                          >
+                                             <SparklesIcon className="w-3 h-3" />
+                                             Use Generated Image
+                                          </button>
+                                       </div>
+                                    )}
+                                 </>
+                              )}
                            </div>
                         </>
                      )}
 
                      <div>
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Prompt (Optional)</label>
+                        <div className="flex justify-between items-center mb-1">
+                           <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Prompt (Optional)</label>
+                           <button
+                              onClick={() => setPrompt(prev => prev ? '' : data.segment)}
+                              className="flex items-center gap-1 text-[10px] text-blue-600 hover:text-blue-800"
+                           >
+                              <PencilIcon className="w-3 h-3" />
+                              Use Node Text
+                           </button>
+                        </div>
                         <textarea
                            value={prompt}
                            onChange={(e) => setPrompt(e.target.value)}

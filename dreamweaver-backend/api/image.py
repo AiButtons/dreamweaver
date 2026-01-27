@@ -44,6 +44,10 @@ class ImageGenerationRequest(BaseModel):
     focal_length: int = 35
     aperture: str = "f/11"
     
+    # Custom dimensions (overrides aspect_ratio)
+    width: Optional[int] = None
+    height: Optional[int] = None
+    
     # Generation settings
     aspect_ratio: str = "16:9"
     resolution: str = "fhd"
@@ -154,6 +158,9 @@ async def generate_image(request: ImageGenerationRequest):
             "n_steps": getattr(request, "n_steps", None),
             "guidance_scale": getattr(request, "guidance_scale", None),
             "seed": getattr(request, "seed", None),
+            # Custom dimensions
+            "width": request.width,
+            "height": request.height,
         },
     )
     
