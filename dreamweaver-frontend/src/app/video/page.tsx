@@ -10,6 +10,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Camera, Film, Mic, MicOff, Play, Settings2, Square, Timer, Upload, X, ChevronRight, Check, Image as ImageIcon, Video, Plus, Clock, Volume2, VolumeX, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner"; // Assuming sonner is used, or alert
+import { useMutation } from "convex/react";
+import { mutationRef } from "@/lib/convexRefs";
 
 
 // Camera movements
@@ -50,7 +52,7 @@ const MODELS = [
     { id: "veo-3.1", name: "Veo 3.1", description: "Google DeepMind Veo Model", icon: "G" },
 ];
 
-const LORAS: any[] = [];
+const LORAS: Array<{ id: string; name: string; description: string; icon: string }> = [];
 
 const DURATIONS = [
     { id: "5", label: "5s" },
@@ -79,6 +81,7 @@ export default function VideoPage() {
     const [frameModalTab, setFrameModalTab] = useState<"recent" | "generations" | "liked">("generations");
 
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
+    const persistGeneration = useMutation(mutationRef("generations:create"));
 
     const selectedMovement = CAMERA_MOVEMENTS.find((m) => m.id === cameraMovement) || CAMERA_MOVEMENTS[0];
 
@@ -121,6 +124,26 @@ export default function VideoPage() {
             if (data.url) {
                 setVideoUrl(data.url);
                 toast.success("Video generated successfully!");
+
+                try {
+                    await persistGeneration({
+                        kind: "video",
+                        prompt: prompt || "",
+                        modelId,
+                        resultUrls: [data.url],
+                        status: "completed",
+                        metadata: {
+                            duration,
+                            aspectRatio,
+                            cameraMovement,
+                            audioEnabled: String(audioEnabled),
+                            slowMotion: String(slowMotion),
+                            batchSize: String(batchSize),
+                        },
+                    });
+                } catch (persistError) {
+                    console.warn("Failed to persist generation:", persistError);
+                }
             }
         } catch (error) {
             console.error("Video generation failed:", error);
@@ -128,7 +151,7 @@ export default function VideoPage() {
         } finally {
             setIsGenerating(false);
         }
-    }, [prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame, modelId]);
+    }, [prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame, modelId, persistGeneration]);
 
     const handleFileUpload = (type: "start" | "end") => {
         const input = document.createElement("input");

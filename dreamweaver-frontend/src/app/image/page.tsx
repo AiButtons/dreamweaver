@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import type { CameraState } from "@/types";
 import { CameraSliders } from "@/components/camera/CameraSliders";
 import { FileUpload } from "@/components/upload/FileUpload";
+import { useMutation } from "convex/react";
+import { mutationRef } from "@/lib/convexRefs";
 
 const CameraControl3D = dynamic(
     () => import("@/components/camera/CameraControl3D").then((mod) => mod.CameraControl3D),
@@ -139,6 +141,7 @@ export default function ImageGenerationPage() {
     // Upload and generation state
     const [uploadedImage, setUploadedImage] = useState<{ file: File; dataUrl: string } | null>(null);
     const [generatedImages, setGeneratedImages] = useState<Array<{ url?: string; b64_json?: string }>>([]);
+    const persistGeneration = useMutation(mutationRef("generations:create"));
 
     const allModels = [...MODELS, ...LORAS];
     const selectedModel = allModels.find((m) => m.id === modelId) || MODELS[0];
@@ -168,7 +171,7 @@ export default function ImageGenerationPage() {
                 ? `${apiUrl}/api/image/edit`
                 : `${apiUrl}/api/image/generate`;
 
-            const payload: any = {
+            const payload: Record<string, unknown> = {
                 prompt,
                 model_id: modelId,
             };
@@ -216,13 +219,33 @@ export default function ImageGenerationPage() {
             const data = await response.json();
             console.log('✅ Generated:', data);
             setGeneratedImages(data.images || []);
-        } catch (error: any) {
+
+            try {
+                const resultUrls = (data.images || [])
+                    .map((img: { url?: string }) => img.url)
+                    .filter(Boolean) as string[];
+
+                await persistGeneration({
+                    kind: "image",
+                    prompt,
+                    modelId,
+                    resultUrls,
+                    status: "completed",
+                    metadata: {
+                        imageCount: String(Array.isArray(data.images) ? data.images.length : 0),
+                        isEditWorkflow: String(isEditWorkflow),
+                    },
+                });
+            } catch (persistError) {
+                console.warn("Failed to persist generation:", persistError);
+            }
+        } catch (error: unknown) {
             console.error('Error generating image:', error);
             alert('Failed to generate image. Check console for details.');
         } finally {
             setIsGenerating(false);
         }
-    }, [prompt, modelId, uploadedImage, isEditWorkflow, cameraState, cameraIndex, lensIndex, focalIndex, apertureIndex, aspectRatio, batchSize, inferenceSteps, guidanceScale, seed]);
+    }, [prompt, modelId, uploadedImage, isEditWorkflow, cameraState, cameraIndex, lensIndex, focalIndex, apertureIndex, aspectRatio, batchSize, inferenceSteps, guidanceScale, seed, persistGeneration]);
 
     return (
         <TooltipProvider delayDuration={300}>

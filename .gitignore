@@ -20,6 +20,8 @@ dreamweaver-frontend/coverage/
 dreamweaver-frontend/.next/
 dreamweaver-frontend/out/
 dreamweaver-frontend/build/
+dreamweaver-frontend/convex/_generated/
+dreamweaver-frontend/.convex/
 dreamweaver-frontend/npm-debug.log*
 dreamweaver-frontend/yarn-debug.log*
 dreamweaver-frontend/yarn-error.log*
@@ -37,3 +39,6 @@ dreamweaver-backend/.venv/
 dreamweaver-backend/.pytest_cache/
 dreamweaver-backend/.coverage
 dreamweaver-backend/htmlcov/
+
+docs/
+.runlogs/

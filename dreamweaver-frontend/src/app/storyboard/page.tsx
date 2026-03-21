@@ -1,323 +1,334 @@
 "use client";
 
-import React, { useState, useCallback, useMemo } from 'react';
+import Link from "next/link";
+import { useMemo, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useMutation, useQuery } from "convex/react";
+import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen } from "lucide-react";
+
+import { mutationRef, queryRef } from "@/lib/convexRefs";
+import { authClient } from "@/lib/auth-client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-    useNodesState,
-    useEdgesState,
-    addEdge,
-    OnConnect,
-    Node,
-    Connection,
-    ReactFlowInstance,
-    ReactFlowProvider
-} from 'reactflow';
-import { v4 as uuidv4 } from 'uuid';
-import 'reactflow/dist/style.css';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import type {
+  StoryboardLibraryItem,
+  StoryboardSort,
+  StoryboardTemplate,
+} from "./types";
 
-import StoryGraph from '@/components/storyboard/StoryGraph';
-import ChatPanel from '@/components/storyboard/ChatPanel';
-import PropertiesPanel from '@/components/storyboard/PropertiesPanel';
-import CanvasToolbar from '@/components/storyboard/CanvasToolbar';
+type AuthSessionEnvelope = {
+  user?: { id?: string | null } | null;
+  session?: { id?: string | null } | null;
+} | null;
 
-import { StoryNode, StoryEdge, ChatMessage, MediaType, AudioConfig, ImageConfig, VideoConfig } from './types';
-import { generateStoryGraph, editNodeText, generateMedia } from './services/apiService';
+type LibraryMode = "all" | "pinned" | "trash";
 
-const generateId = () => uuidv4();
+const formatRelativeDate = (timestamp: number) => {
+  const delta = Date.now() - timestamp;
+  const minute = 60_000;
+  const hour = minute * 60;
+  const day = hour * 24;
+  if (delta < minute) return "just now";
+  if (delta < hour) return `${Math.floor(delta / minute)}m ago`;
+  if (delta < day) return `${Math.floor(delta / hour)}h ago`;
+  return `${Math.floor(delta / day)}d ago`;
+};
 
-const INITIAL_NODES: StoryNode[] = [];
-const INITIAL_EDGES: StoryEdge[] = [];
+const sortOptions: Array<{ value: StoryboardSort; label: string }> = [
+  { value: "updated_desc", label: "Updated (newest)" },
+  { value: "updated_asc", label: "Updated (oldest)" },
+  { value: "title_asc", label: "Title (A-Z)" },
+  { value: "created_desc", label: "Created (newest)" },
+];
 
-export default function StoryboardPage() {
+export default function StoryboardLibraryPage() {
+  const router = useRouter();
+  const sessionState = authClient.useSession();
+  const sessionData = (sessionState.data as AuthSessionEnvelope | undefined) ?? null;
+  const isAuthLoading = sessionState.isPending;
+  const isAuthenticated = Boolean(sessionData?.user?.id ?? sessionData?.session?.id);
+
+  const [mode, setMode] = useState<LibraryMode>("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<StoryboardSort>("updated_desc");
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+
+  const libraryRows = useQuery(
+    queryRef("storyboards:listLibrary"),
+    isAuthenticated
+      ? {
+          status: mode === "trash" ? "trashed" : "active",
+          pinnedOnly: mode === "pinned",
+          search,
+          sort,
+          limit: 120,
+        }
+      : "skip",
+  ) as StoryboardLibraryItem[] | undefined;
+
+  const templates = useQuery(
+    queryRef("storyboards:listTemplates"),
+    isAuthenticated ? {} : "skip",
+  ) as StoryboardTemplate[] | undefined;
+
+  const createFromTemplate = useMutation(mutationRef("storyboards:createStoryboardFromTemplate"));
+  const renameStoryboard = useMutation(mutationRef("storyboards:renameStoryboard"));
+  const setPinned = useMutation(mutationRef("storyboards:setStoryboardPinned"));
+  const trashStoryboard = useMutation(mutationRef("storyboards:trashStoryboard"));
+  const restoreStoryboard = useMutation(mutationRef("storyboards:restoreStoryboard"));
+  const deleteStoryboardPermanently = useMutation(mutationRef("storyboards:deleteStoryboardPermanently"));
+  const duplicateStoryboard = useMutation(mutationRef("storyboards:duplicateStoryboard"));
+  const backfillStoryboardMetadata = useMutation(mutationRef("storyboards:backfillStoryboardMetadata"));
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void backfillStoryboardMetadata({ limit: 500 }).catch(() => undefined);
+  }, [backfillStoryboardMetadata, isAuthenticated]);
+
+  const rows = useMemo(() => libraryRows ?? [], [libraryRows]);
+
+  const handleCreateFromTemplate = async (template: StoryboardTemplate) => {
+    setIsBusy(true);
+    try {
+      const storyboardId = (await createFromTemplate({
+        templateId: template.templateId,
+        title: template.name,
+      })) as string;
+      setTemplateOpen(false);
+      router.push(`/storyboard/${storyboardId}`);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const openStoryboard = (storyboardId: string) => {
+    router.push(`/storyboard/${storyboardId}`);
+  };
+
+  const handleRename = async (storyboard: StoryboardLibraryItem) => {
+    const nextTitle = window.prompt("Rename storyboard", storyboard.title);
+    if (!nextTitle || nextTitle.trim().length === 0) return;
+    await renameStoryboard({ storyboardId: storyboard._id, title: nextTitle.trim() });
+  };
+
+  const handleDuplicate = async (storyboard: StoryboardLibraryItem) => {
+    const nextTitle = window.prompt("Duplicate as", `Copy of ${storyboard.title}`);
+    const duplicatedId = (await duplicateStoryboard({
+      storyboardId: storyboard._id,
+      title: nextTitle?.trim() || undefined,
+    })) as string;
+    router.push(`/storyboard/${duplicatedId}`);
+  };
+
+  if (isAuthLoading) {
     return (
-        <ReactFlowProvider>
-            <AppContent />
-        </ReactFlowProvider>
+      <div className="flex h-[calc(100vh-3.5rem)] w-full items-center justify-center bg-slate-950 text-slate-200">
+        Loading storyboards...
+      </div>
     );
-}
+  }
 
-function AppContent() {
-    const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
-    const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
-    const [selectedNode, setSelectedNode] = useState<StoryNode | null>(null);
-    const [messages, setMessages] = useState<ChatMessage[]>([
-        { id: '1', role: 'assistant', content: 'Welcome to StoryNodes. Start by describing your story idea, or add nodes manually.', timestamp: Date.now() }
-    ]);
-    const [isProcessing, setIsProcessing] = useState(false);
-
-    const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
-
-    // Calculate panel position based on selected node
-    const panelPosition = useMemo(() => {
-        if (!selectedNode || !rfInstance) return { top: 8, right: 80 };
-
-        const viewport = rfInstance.getViewport();
-        const nodeWidth = 320; // CustomNode width
-        const panelWidth = 340;
-        const panelHeight = 600; // Approximate max height
-        const padding = 16;
-
-        // Convert node position to screen coordinates
-        const screenX = selectedNode.position.x * viewport.zoom + viewport.x;
-        const screenY = selectedNode.position.y * viewport.zoom + viewport.y;
-
-        // Default: position to the right of the node
-        let left = screenX + nodeWidth * viewport.zoom + padding;
-        let top = screenY;
-
-        // Get viewport dimensions (approximate canvas area)
-        const viewportWidth = window.innerWidth - 320; // minus sidebar
-        const viewportHeight = window.innerHeight - 56; // minus navbar
-
-        // Check right overflow - flip to left if needed
-        if (left + panelWidth > viewportWidth) {
-            left = screenX - panelWidth - padding;
-        }
-
-        // Check left underflow
-        if (left < padding) {
-            left = padding;
-        }
-
-        // Check bottom overflow - move up if needed
-        if (top + panelHeight > viewportHeight) {
-            top = Math.max(padding, viewportHeight - panelHeight);
-        }
-
-        // Check top underflow
-        if (top < padding) {
-            top = padding;
-        }
-
-        return { top, left };
-    }, [selectedNode, rfInstance]);
-
-    const onConnect: OnConnect = useCallback(
-        (params: Connection) => setEdges((eds) => addEdge(params, eds)),
-        [setEdges]
-    );
-
-    const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-        setSelectedNode(node as StoryNode);
-    }, []);
-
-    const onPaneClick = useCallback(() => {
-        setSelectedNode(null);
-    }, []);
-
-    const handleAddNode = () => {
-        const id = generateId();
-        let position = { x: 100, y: 100 };
-        if (selectedNode && rfInstance) {
-            position = { x: selectedNode.position.x + 400, y: selectedNode.position.y };
-        } else if (rfInstance) {
-            const center = rfInstance.project({ x: window.innerWidth / 2 - 200, y: window.innerHeight / 2 });
-            if (center) position = center;
-        }
-        const newNode: StoryNode = {
-            id,
-            type: 'custom',
-            position,
-            data: {
-                label: 'New Scene',
-                segment: 'Click to edit this scene description...'
-            }
-        };
-        setNodes((nds) => [...nds, newNode]);
-        if (selectedNode) {
-            setEdges((eds) => [...eds, { id: `e${selectedNode.id}-${id}`, source: selectedNode.id, target: id, type: 'smoothstep', animated: true, style: { stroke: '#94a3b8', strokeWidth: 2 } }]);
-        }
-        setSelectedNode(newNode);
-    };
-
-    const handleDeleteNode = () => {
-        if (!selectedNode) return;
-        setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-        setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
-        setSelectedNode(null);
-    };
-
-    const handleFitView = () => { if (rfInstance) rfInstance.fitView({ padding: 0.2, duration: 800 }); };
-    const handleZoomIn = () => { if (rfInstance) rfInstance.zoomIn({ duration: 500 }); };
-    const handleZoomOut = () => { if (rfInstance) rfInstance.zoomOut({ duration: 500 }); };
-
-    const handleSendMessage = async (text: string) => {
-        const userMsg: ChatMessage = { id: generateId(), role: 'user', content: text, timestamp: Date.now() };
-        setMessages(prev => [...prev, userMsg]);
-        setIsProcessing(true);
-
-        try {
-            const isEdit = nodes.length > 0 && selectedNode && (text.toLowerCase().includes('change') || text.toLowerCase().includes('make') || text.toLowerCase().includes('rewrite'));
-            if (isEdit && selectedNode) {
-                await handleEditNode(selectedNode.id, text);
-                setMessages(prev => [...prev, { id: generateId(), role: 'assistant', content: `Updated node "${selectedNode.data.label}".`, timestamp: Date.now() }]);
-            } else {
-                setMessages(prev => [...prev, { id: generateId(), role: 'assistant', content: 'Generating story structure...', timestamp: Date.now() }]);
-
-                const graphData = await generateStoryGraph(text);
-
-                const newNodes: StoryNode[] = graphData.nodes.map(n => ({
-                    id: n.id,
-                    type: 'custom',
-                    data: { label: n.data.label, segment: n.data.segment },
-                    position: n.position
-                }));
-                const newEdges: StoryEdge[] = graphData.edges.map(e => ({
-                    id: e.id,
-                    source: e.source,
-                    target: e.target,
-                    type: 'smoothstep',
-                    animated: true,
-                    style: { stroke: '#94a3b8', strokeWidth: 2 }
-                }));
-                setNodes(newNodes);
-                setEdges(newEdges);
-                setMessages(prev => [...prev, { id: generateId(), role: 'assistant', content: `Created story with ${newNodes.length} nodes.`, timestamp: Date.now() }]);
-
-                // Wait for render to stabilize before fitting view
-                setTimeout(() => handleFitView(), 300);
-            }
-        } catch (error: any) {
-            console.error(error);
-            setMessages(prev => [...prev, { id: generateId(), role: 'assistant', content: `Error: ${error.message || 'Something went wrong.'}`, timestamp: Date.now() }]);
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const updateNodeData = (id: string, partialData: Partial<StoryNode['data']>) => {
-        setNodes((nds) => nds.map((node) => {
-            if (node.id === id) {
-                const newData = { ...node.data, ...partialData };
-                if (selectedNode?.id === id) {
-                    setSelectedNode({ ...node, data: newData });
-                }
-                return { ...node, data: newData };
-            }
-            return node;
-        }));
-    };
-
-    const handleEditNode = async (nodeId: string, instruction: string) => {
-        setIsProcessing(true);
-        updateNodeData(nodeId, { isProcessing: true, processingTask: 'text' });
-        try {
-            const node = nodes.find(n => n.id === nodeId);
-            if (!node) return;
-            const result = await editNodeText(node.data.segment, instruction);
-            updateNodeData(nodeId, {
-                label: result.label,
-                segment: result.segment,
-                isProcessing: false,
-                processingTask: undefined
-            });
-        } catch (e) {
-            console.error(e);
-            updateNodeData(nodeId, { isProcessing: false, processingTask: undefined });
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleGenerateMedia = async (nodeId: string, type: MediaType, prompt: string, config: any) => {
-        setIsProcessing(true);
-        updateNodeData(nodeId, { isProcessing: true, processingTask: type.toLowerCase() });
-        try {
-            // Map frontend config to backend config
-            if (type === MediaType.IMAGE && config.inputImage) {
-                updateNodeData(nodeId, { inputImage: config.inputImage });
-            }
-            const resultUrl = await generateMedia(type, prompt, config);
-            if (type === MediaType.IMAGE) {
-                // Update history with new image
-                setNodes((nds) => nds.map((node) => {
-                    if (node.id === nodeId) {
-                        const oldHistory = node.data.imageHistory || [];
-                        // Ensure existing image is in history if this is the first time adding history
-                        const historyWithLegacy = (oldHistory.length === 0 && node.data.image)
-                            ? [node.data.image]
-                            : oldHistory;
-
-                        const newHistory = [...historyWithLegacy, resultUrl];
-                        const newData = { ...node.data, image: resultUrl, imageHistory: newHistory };
-
-                        if (selectedNode?.id === nodeId) {
-                            setSelectedNode({ ...node, data: newData });
-                        }
-                        return { ...node, data: newData };
-                    }
-                    return node;
-                }));
-            }
-            if (type === MediaType.AUDIO) updateNodeData(nodeId, { audio: resultUrl });
-            if (type === MediaType.VIDEO) updateNodeData(nodeId, { video: resultUrl });
-
-        } catch (e: any) {
-            console.error(e);
-            alert(`Media generation failed: ${e.message}`);
-        } finally {
-            updateNodeData(nodeId, { isProcessing: false, processingTask: undefined });
-            setIsProcessing(false);
-        }
-    };
-
+  if (!isAuthenticated) {
     return (
-        <div className="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-white text-slate-900 font-sans storyboard-scroll">
-            {/* Sidebar Chat */}
-            <div className="w-80 h-full z-20 shadow-xl border-r border-gray-100 flex-shrink-0 bg-white">
-                <ChatPanel
-                    messages={messages}
-                    onSendMessage={handleSendMessage}
-                    isGenerating={isProcessing}
-                    selectedNode={selectedNode}
-                    onClearSelection={() => setSelectedNode(null)}
-                />
-            </div>
-
-            {/* Main Canvas */}
-            <div className="flex-1 relative h-full bg-slate-50">
-                <StoryGraph
-                    nodes={nodes}
-                    edges={edges}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
-                    onConnect={onConnect}
-                    onNodeClick={onNodeClick}
-                    onPaneClick={onPaneClick}
-                    // @ts-ignore
-                    onInit={setRfInstance}
-                />
-
-                <CanvasToolbar
-                    onAddNode={handleAddNode}
-                    onDeleteNode={handleDeleteNode}
-                    onFitView={handleFitView}
-                    onZoomIn={handleZoomIn}
-                    onZoomOut={handleZoomOut}
-                    hasSelection={!!selectedNode}
-                />
-
-                {/* Floating Properties Card */}
-                {selectedNode && (
-                    <div
-                        className="absolute z-30"
-                        style={{
-                            top: panelPosition.top,
-                            left: panelPosition.left !== undefined ? panelPosition.left : undefined,
-                            right: panelPosition.left === undefined ? 80 : undefined
-                        }}
-                    >
-                        <PropertiesPanel
-                            selectedNode={selectedNode}
-                            nodes={nodes}
-                            edges={edges}
-                            onGenerateMedia={handleGenerateMedia}
-                            onEditNode={handleEditNode}
-                            isProcessing={isProcessing}
-                            onClose={() => setSelectedNode(null)}
-                        />
-                    </div>
-                )}
-            </div>
+      <div className="flex h-[calc(100vh-3.5rem)] w-full items-center justify-center bg-slate-950 px-6 text-center text-slate-200">
+        <div>
+          <h1 className="text-lg font-semibold">Sign in required</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Storyboard library is protected by Better Auth.
+          </p>
+          <div className="mt-4">
+            <Button asChild>
+              <Link href="/auth?redirect=%2Fstoryboard">Go to sign in</Link>
+            </Button>
+          </div>
         </div>
+      </div>
     );
+  }
+
+  return (
+    <div className="h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-background text-foreground">
+      <div className="mx-auto h-full max-w-[1400px] px-6 py-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Storyboard Library</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Organize projects, resume past work, and create from film-ready templates.
+            </p>
+          </div>
+
+          <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
+            <DialogTrigger asChild>
+              <Button className="gap-2">
+                <Plus className="size-4" />
+                New Storyboard
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-3xl">
+              <DialogHeader>
+                <DialogTitle>Choose a template</DialogTitle>
+                <DialogDescription>
+                  Start with a built-in storyboard scaffold. You can customize every node after creation.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
+                {(templates ?? []).map((template) => (
+                  <button
+                    key={template.templateId}
+                    type="button"
+                    onClick={() => void handleCreateFromTemplate(template)}
+                    disabled={isBusy}
+                    className="rounded-xl border border-border/70 bg-card/40 p-4 text-left transition-colors hover:bg-card/70"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold">{template.name}</div>
+                      <Badge variant="secondary" className="text-[10px]">{template.mode}</Badge>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">{template.description}</div>
+                  </button>
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <div className="relative w-full max-w-md">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search storyboards"
+              className="pl-9"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button variant={mode === "all" ? "secondary" : "outline"} size="sm" onClick={() => setMode("all")}>All</Button>
+            <Button variant={mode === "pinned" ? "secondary" : "outline"} size="sm" onClick={() => setMode("pinned")}>Pinned</Button>
+            <Button variant={mode === "trash" ? "secondary" : "outline"} size="sm" onClick={() => setMode("trash")}>Trash</Button>
+          </div>
+
+          <div className="ml-auto w-52">
+            <Select value={sort} onValueChange={(value) => setSort(value as StoryboardSort)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Sort" />
+              </SelectTrigger>
+              <SelectContent>
+                {sortOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="mt-5 h-[calc(100%-9rem)] overflow-y-auto pr-1 storyboard-scroll">
+          {rows.length === 0 ? (
+            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-card/20">
+              <div className="text-center">
+                <div className="text-lg font-semibold">{mode === "trash" ? "Trash is empty" : "No storyboards yet"}</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {mode === "trash"
+                    ? "Deleted projects will appear here for 30 days before purge."
+                    : "Create your first storyboard from a template to get started."}
+                </div>
+                {mode !== "trash" ? (
+                  <Button className="mt-4" onClick={() => setTemplateOpen(true)}>Create from template</Button>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {rows.map((storyboard) => (
+                <article key={storyboard._id} className="overflow-hidden rounded-2xl border border-border/70 bg-card/40">
+                  <button
+                    type="button"
+                    onClick={() => openStoryboard(storyboard._id)}
+                    className="block w-full text-left"
+                  >
+                    <div className="h-36 w-full bg-[radial-gradient(circle_at_25%_20%,rgba(163,230,53,0.25),transparent_36%),linear-gradient(180deg,rgba(31,41,55,0.82),rgba(15,23,42,0.95))]">
+                      {storyboard.coverImageUrl ? (
+                        <img src={storyboard.coverImageUrl} alt={storyboard.title} className="h-full w-full object-cover" />
+                      ) : null}
+                    </div>
+                  </button>
+
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openStoryboard(storyboard._id)}
+                        className="text-left"
+                      >
+                        <h3 className="text-sm font-semibold leading-tight">{storyboard.title}</h3>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Updated {formatRelativeDate(storyboard.updatedAt)}
+                        </p>
+                      </button>
+
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => openStoryboard(storyboard._id)}>
+                            <FolderOpen className="mr-2 size-4" /> Open
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void handleRename(storyboard)}>Rename</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void handleDuplicate(storyboard)}>
+                            <Copy className="mr-2 size-4" /> Duplicate
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void setPinned({ storyboardId: storyboard._id, isPinned: !Boolean(storyboard.isPinned) })}>
+                            {storyboard.isPinned ? <PinOff className="mr-2 size-4" /> : <Pin className="mr-2 size-4" />}
+                            {storyboard.isPinned ? "Unpin" : "Pin"}
+                          </DropdownMenuItem>
+                          {mode === "trash" ? (
+                            <>
+                              <DropdownMenuItem onClick={() => void restoreStoryboard({ storyboardId: storyboard._id })}>
+                                <RotateCcw className="mr-2 size-4" /> Restore
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void deleteStoryboardPermanently({ storyboardId: storyboard._id })}
+                                className="text-rose-400"
+                              >
+                                <Trash2 className="mr-2 size-4" /> Delete permanently
+                              </DropdownMenuItem>
+                            </>
+                          ) : (
+                            <DropdownMenuItem onClick={() => void trashStoryboard({ storyboardId: storyboard._id })}>
+                              <Trash2 className="mr-2 size-4" /> Move to trash
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <Badge variant="secondary">{storyboard.nodeCount ?? 0} nodes</Badge>
+                      <Badge variant="secondary">{storyboard.imageCount ?? 0} images</Badge>
+                      <Badge variant="secondary">{storyboard.videoCount ?? 0} videos</Badge>
+                      {storyboard.isPinned ? <Badge className="bg-lime-500/20 text-lime-300">Pinned</Badge> : null}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

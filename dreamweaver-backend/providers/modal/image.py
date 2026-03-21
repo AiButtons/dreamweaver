@@ -60,7 +60,7 @@ class ModalImageProvider(ImageProvider):
         """
         self.api_key = api_key or settings.modal_api_key
         if not self.api_key:
-            print("⚠️  Modal API key not configured - using mock responses")
+            print("Modal API key not configured - using mock responses")
         self._client: Optional[httpx.AsyncClient] = None
     
     @property
@@ -143,8 +143,8 @@ class ModalImageProvider(ImageProvider):
             }
             
             # Make API call - this will wait for Modal to finish generation
-            print(f"🔄 Sending request to Modal (model: {request.model_id}, steps: {steps})")
-            print(f"⏱️  This may take 30-90 seconds depending on steps...")
+            print(f"Sending request to Modal (model: {request.model_id}, steps: {steps})")
+            print("This may take 30-90 seconds depending on steps...")
             
             response = await self.client.post(
                 self.IMAGE_GEN_ENDPOINT,
@@ -152,7 +152,7 @@ class ModalImageProvider(ImageProvider):
                 headers={"Authorization": f"Bearer {token}"}
             )
             
-            print(f"✅ Modal response received (status: {response.status_code})")
+            print(f"Modal response received (status: {response.status_code})")
             
             if response.status_code != 200:
                 raise ProviderError(
@@ -302,7 +302,7 @@ class ModalImageProvider(ImageProvider):
             if max_sequence_length is not None:
                 payload["max_sequence_length"] = max_sequence_length
             
-            print(f"🔧 Modal Edit Request: Prompt='{request.prompt}' Steps={steps} Guidance={guidance}")
+            print(f"Modal Edit Request: Prompt='{request.prompt}' Steps={steps} Guidance={guidance}")
             
             response = await self.client.post(
                 self.QWEN_EDIT_ENDPOINT,
@@ -311,7 +311,7 @@ class ModalImageProvider(ImageProvider):
             )
             
             if response.status_code != 200:
-                print(f"   ❌ Error response: {response.text[:200]}")
+                print(f"   Error response: {response.text[:200]}")
                 raise ProviderError(
                     message=f"Qwen edit error: {response.text}",
                     provider=self.provider_name,
@@ -323,7 +323,7 @@ class ModalImageProvider(ImageProvider):
             import base64
             image_b64 = base64.b64encode(response.content).decode('utf-8')
             
-            print(f"   ✅ Success! Image size: {len(response.content) / 1024:.2f} KB")
+            print(f"   Success! Image size: {len(response.content) / 1024:.2f} KB")
             
             created = int(time.time())
             return ImageGenerationResponse(
@@ -335,7 +335,7 @@ class ModalImageProvider(ImageProvider):
             )
             
         except httpx.RequestError as e:
-            print(f"   ❌ httpx.RequestError: {str(e)}")
+            print(f"   httpx.RequestError: {str(e)}")
             import traceback
             traceback.print_exc()
             raise ProviderError(
@@ -344,7 +344,7 @@ class ModalImageProvider(ImageProvider):
                 error_code="REQUEST_ERROR",
             ) from e
         except Exception as e:
-            print(f"   ❌ Unexpected error: {type(e).__name__}: {str(e)}")
+            print(f"   Unexpected error: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             raise

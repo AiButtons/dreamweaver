@@ -102,7 +102,7 @@ class OpenAIImageProvider(ImageProvider):
         """
         self.api_key = api_key or settings.openai_api_key
         if not self.api_key:
-            print("⚠️  OpenAI API key not configured - mock responses will be used")
+            print("OpenAI API key not configured - mock responses will be used")
         self._client: Optional[AsyncOpenAI] = None
     
     @property
@@ -315,3 +315,4 @@ class OpenAIImageProvider(ImageProvider):
             images=images,
             created_at=created,
         )
+

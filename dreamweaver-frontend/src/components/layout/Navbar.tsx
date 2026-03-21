@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Image as ImageIcon, Video, Wand2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { authClient } from "@/lib/auth-client";
 
 const NAV_ITEMS = [
     { href: "/image", label: "Image", icon: ImageIcon },
@@ -15,6 +16,11 @@ const NAV_ITEMS = [
 
 export function Navbar() {
     const pathname = usePathname();
+    const sessionState = authClient.useSession();
+    const hasSession = Boolean(
+        (sessionState.data?.user as { id?: string | null } | null | undefined)?.id
+            ?? (sessionState.data?.session as { id?: string | null } | null | undefined)?.id
+    );
 
     return (
         <header className="sticky top-0 z-50 h-14 border-b border-border/50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -50,8 +56,25 @@ export function Navbar() {
                     })}
                 </nav>
 
-                {/* Right side - empty for now */}
-                <div className="w-24" />
+                <div className="w-24 flex justify-end">
+                    {hasSession ? (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                void authClient.signOut();
+                            }}
+                        >
+                            Sign out
+                        </Button>
+                    ) : (
+                        <Link href="/auth?redirect=%2Fstoryboard">
+                            <Button variant="outline" size="sm">
+                                Sign in
+                            </Button>
+                        </Link>
+                    )}
+                </div>
             </div>
         </header>
     );

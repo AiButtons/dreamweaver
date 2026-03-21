@@ -32,7 +32,7 @@ class VideoGenerationRequest(BaseModel):
 
 @router.post("/generate")
 async def generate_video(request: VideoGenerationRequest):
-    logger.info(f"📥 Received Video Generation Request: {request.dict()}")
+    logger.info(f"Received Video Generation Request: {request.dict()}")
     try:
         if request.model_id == "veo-3.1":
             # Use Google Provider
@@ -53,3 +53,4 @@ async def generate_video(request: VideoGenerationRequest):
     except Exception as e:
         logger.error(f"Video generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+

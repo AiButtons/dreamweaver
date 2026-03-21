@@ -1,9 +1,9 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState } from 'react';
 import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
-import { StoryData } from '@/app/storyboard/types';
-import { PlayIcon, PauseIcon, PhotoIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
+import { StoryNodeData } from '@/app/storyboard/types';
+import { PlayIcon, PhotoIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
 
-const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
+const CustomNode = ({ id, data, selected }: NodeProps<StoryNodeData>) => {
   const { setNodes } = useReactFlow();
 
   const history = data.imageHistory || [];
@@ -25,23 +25,27 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
 
   const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
 
-  // Auto-switch to video when it becomes available
-  useEffect(() => {
-    if (data.video) setActiveMedia('video');
-  }, [data.video]);
-
-  // If user manually switches to image, respect that loop unless new video comes
-  // (The above effect handles "new video" roughly, but simplistic is fine for now)
-
   const showVideo = activeMedia === 'video' && data.video;
-  const showImage = !showVideo; // Fallback to image view (which might be empty placeholder)
+  const continuityStatus = data.continuity.consistencyStatus;
+  const continuityTone = continuityStatus === 'ok'
+    ? 'border-emerald-400/35 bg-emerald-400/12 text-emerald-200'
+    : continuityStatus === 'warning'
+      ? 'border-amber-300/35 bg-amber-300/12 text-amber-100'
+      : 'border-rose-300/35 bg-rose-300/12 text-rose-100';
+  const typeLabel = data.nodeType.replace('_', ' ');
 
   return (
-    <div className={`w-[320px] bg-white rounded-2xl shadow-xl transition-all duration-200 overflow-hidden flex flex-col group ${selected ? 'ring-2 ring-blue-500 shadow-blue-100' : 'border border-gray-100'}`}>
-      <Handle type="target" position={Position.Left} className="!bg-slate-400 !w-3 !h-3" />
+    <div
+      className={`w-[320px] overflow-hidden rounded-2xl border transition-all duration-200 group backdrop-blur-sm ${
+        selected
+          ? 'border-lime-300/70 ring-2 ring-lime-300/30 shadow-[0_20px_65px_rgba(132,204,22,0.24)] -translate-y-0.5'
+          : 'border-white/15 shadow-[0_14px_45px_rgba(0,0,0,0.45)] hover:border-white/25 hover:-translate-y-0.5'
+      } bg-[linear-gradient(180deg,rgba(27,35,49,0.98)_0%,rgba(14,20,32,0.96)_100%)]`}
+    >
+      <Handle type="target" position={Position.Left} className="!bg-slate-300 !w-3 !h-3 !border !border-slate-900" />
 
       {/* Media Preview Area */}
-      <div className="h-48 bg-slate-100 relative overflow-hidden group/media">
+      <div className="h-44 bg-slate-900/70 border-b border-white/10 relative overflow-hidden group/media">
         {showVideo ? (
           <video src={data.video} controls className="w-full h-full object-cover" />
         ) : data.image ? (
@@ -53,13 +57,13 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
               <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between px-2 opacity-0 group-hover/media:opacity-100 transition-opacity z-30">
                 <button
                   onClick={(e) => hasPrev && handleNav(e, 'prev')}
-                  className={`p-1 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors ${!hasPrev ? 'invisible' : ''}`}
+                  className={`p-1 rounded-full bg-black/55 text-white hover:bg-black/75 transition-colors ${!hasPrev ? 'invisible' : ''}`}
                 >
                   <ChevronLeftIcon className="w-5 h-5" />
                 </button>
                 <button
                   onClick={(e) => hasNext && handleNav(e, 'next')}
-                  className={`p-1 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors ${!hasNext ? 'invisible' : ''}`}
+                  className={`p-1 rounded-full bg-black/55 text-white hover:bg-black/75 transition-colors ${!hasNext ? 'invisible' : ''}`}
                 >
                   <ChevronRightIcon className="w-5 h-5" />
                 </button>
@@ -68,7 +72,10 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
 
             {/* Input Overlay */}
             {data.inputImage && (
-              <div className="absolute bottom-2 left-2 w-20 h-20 rounded-lg border-2 border-white shadow-lg overflow-hidden z-20 hover:scale-110 transition-transform cursor-pointer" title="Input Image">
+              <div
+                className="absolute bottom-2 left-2 w-16 h-16 rounded-lg border border-white/30 shadow-lg overflow-hidden z-20 hover:scale-105 transition-transform cursor-pointer"
+                title="Input Image"
+              >
                 <img src={data.inputImage} alt="Input" className="w-full h-full object-cover" />
               </div>
             )}
@@ -76,8 +83,8 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
         ) : data.inputImage ? (
           <img src={data.inputImage} alt="Input w-full h-full object-cover" className="w-full h-full object-cover" />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-slate-300 bg-slate-50">
-            <PhotoIcon className="w-12 h-12" />
+          <div className="w-full h-full flex items-center justify-center text-slate-500 bg-[radial-gradient(circle_at_40%_30%,rgba(148,163,184,0.18),rgba(15,23,42,0.72))]">
+            <PhotoIcon className="w-10 h-10" />
           </div>
         )}
 
@@ -94,7 +101,7 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
         )}
         {/* Toggle Controls (if both exist) */}
         {data.image && data.video && (
-          <div className="absolute top-2 right-2 flex bg-black/50 rounded-lg p-0.5 z-40 backdrop-blur-sm">
+          <div className="absolute top-2 right-2 flex bg-black/55 rounded-lg p-0.5 z-40 backdrop-blur-sm border border-white/15">
             <button
               onClick={(e) => { e.stopPropagation(); setActiveMedia('image'); }}
               className={`p-1.5 rounded-md transition-all ${activeMedia === 'image' ? 'bg-white text-blue-600 shadow-sm' : 'text-white hover:bg-white/10'}`}
@@ -113,27 +120,41 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryData>) => {
 
       {/* Content Area */}
       <div className="p-4 flex-1 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <h3 className="font-bold text-slate-800 text-sm">{data.label}</h3>
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="font-semibold text-slate-100 text-sm leading-snug line-clamp-2">{data.label}</h3>
+          <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200 shrink-0">
+            {typeLabel}
+          </span>
         </div>
 
-        <p className="text-xs text-slate-500 leading-relaxed line-clamp-4">{data.segment}</p>
+        <p className="text-xs text-slate-300/90 leading-relaxed line-clamp-4">{data.segment}</p>
+
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${continuityTone}`}>
+            {continuityStatus}
+          </span>
+          {(data.media.images.length > 0 || data.media.videos.length > 0) ? (
+            <span className="text-[10px] text-slate-400">
+              {data.media.images.length} img · {data.media.videos.length} vid
+            </span>
+          ) : null}
+        </div>
 
         {/* Audio Player Styling (Mock visual if audio exists) */}
         {data.audio && (
-          <div className="mt-2 bg-slate-50 rounded-lg p-2 flex items-center gap-2 border border-slate-100">
-            <button className="w-6 h-6 bg-white rounded-full flex items-center justify-center shadow-sm text-slate-700 hover:text-blue-500">
+          <div className="mt-1 bg-white/5 rounded-lg p-2 flex items-center gap-2 border border-white/10">
+            <button className="w-6 h-6 bg-white/10 rounded-full flex items-center justify-center text-slate-200 hover:bg-white/20">
               <PlayIcon className="w-3 h-3 ml-0.5" />
             </button>
-            <div className="flex-1 h-1 bg-slate-200 rounded-full overflow-hidden">
-              <div className="w-1/3 h-full bg-slate-400 rounded-full"></div>
+            <div className="flex-1 h-1 bg-white/15 rounded-full overflow-hidden">
+              <div className="w-1/3 h-full bg-lime-300/75 rounded-full"></div>
             </div>
             <span className="text-[9px] font-mono text-slate-400">0:00</span>
           </div>
         )}
       </div>
 
-      <Handle type="source" position={Position.Right} className="!bg-slate-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Right} className="!bg-slate-300 !w-3 !h-3 !border !border-slate-900" />
     </div>
   );
 };

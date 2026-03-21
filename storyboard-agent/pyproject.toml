@@ -1,0 +1,22 @@
+[project]
+name = "storyboard-agent"
+version = "0.1.0"
+description = "Dedicated LangGraph service for Dreamweaver storyboard orchestration"
+requires-python = ">=3.12"
+dependencies = [
+  "deepagents==0.4.1",
+  "fastapi==0.116.1",
+  "langgraph>=1.0.0,<2.0.0",
+  "langgraph-cli[inmem]>=0.4.0",
+  "langchain-core>=1.2.10,<2.0.0",
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "uvicorn==0.35.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["deep"]
+py-modules = ["agent", "linear_agent", "server"]

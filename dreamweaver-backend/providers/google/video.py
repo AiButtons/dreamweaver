@@ -50,7 +50,7 @@ class GoogleVideoProvider(VideoProvider):
             }
         }
         
-        logger.info(f"🚀 Veo 3.1 Generation Request: {json.dumps(payload, indent=2)}")
+        logger.info(f"Veo 3.1 Generation Request: {json.dumps(payload, indent=2)}")
         
         # If we have a real key, try to call (this will likely fail without real Project ID)
         if self.api_key == "PLACEHOLDER_KEY":
@@ -74,3 +74,4 @@ class GoogleVideoProvider(VideoProvider):
 
     async def extend(self, request: Any) -> Any:
         raise NotImplementedError("Extend not supported yet")
+

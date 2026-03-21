@@ -1,399 +1,406 @@
-import React, { useState } from 'react';
-import { StoryNode, StoryEdge, MediaType, VoiceName, AudioConfig, ImageConfig, VideoConfig } from '@/app/storyboard/types';
-import {
-   PhotoIcon,
-   VideoCameraIcon,
-   MusicalNoteIcon,
-   PencilIcon,
-   XMarkIcon,
-   SparklesIcon,
-   ArrowsRightLeftIcon
-} from '@heroicons/react/24/solid';
-import { FileUpload } from "@/components/upload/FileUpload";
+"use client";
+
+import React, { useMemo, useState } from "react";
+import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2 } from "lucide-react";
+import { MediaType } from "@/app/storyboard/types";
+import type { StoryEdge, StoryNode, VoiceName, StoryboardMediaConfig } from "@/app/storyboard/types";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 
 interface PropertiesPanelProps {
-   selectedNode: StoryNode | null;
-   nodes?: StoryNode[];
-   edges?: StoryEdge[];
-   onGenerateMedia: (nodeId: string, type: MediaType, prompt: string, config: any) => void;
-   onEditNode: (nodeId: string, instruction: string) => void;
-   isProcessing: boolean;
-   onClose: () => void;
+  selectedNode: StoryNode | null;
+  nodes?: StoryNode[];
+  edges?: StoryEdge[];
+  onGenerateMedia: (nodeId: string, type: MediaType, prompt: string, config: StoryboardMediaConfig) => void;
+  onEditNode: (nodeId: string, instruction: string) => void;
+  isProcessing: boolean;
+  onClose: () => void;
 }
 
-const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedNode, nodes = [], edges = [], onGenerateMedia, onEditNode, isProcessing, onClose }) => {
-   const [activeTab, setActiveTab] = useState<'EDIT' | 'MEDIA'>('MEDIA');
-   const [mediaType, setMediaType] = useState<MediaType>(MediaType.IMAGE);
+const defaultNegativePrompt =
+  "full body shot, wide shot, distant, rotation of subject, spinning person, morphing, distortion";
 
-   // Media Config States
-   const [prompt, setPrompt] = useState('');
-   const [negativePrompt, setNegativePrompt] = useState('full body shot, wide shot, distant, rotation of subject, spinning person, morphing, distortion');
-   const [style, setStyle] = useState('');
-   const [voice, setVoice] = useState<VoiceName>('Kore');
-   const [aspectRatio, setAspectRatio] = useState('16:9');
-   const [inputImage, setInputImage] = useState<{ file: File; dataUrl: string } | null>(null);
-   const [showUpload, setShowUpload] = useState(false);
+function getNextNode(currentId: string, nodes: StoryNode[], edges: StoryEdge[]) {
+  const edge = edges.find((e) => e.source === currentId);
+  if (!edge) return null;
+  return nodes.find((n) => n.id === edge.target) ?? null;
+}
 
-   // Video Specific Options
-   const [audioEnabled, setAudioEnabled] = useState(true);
-   const [slowMotion, setSlowMotion] = useState(false);
-   const [duration, setDuration] = useState('5');
+export default function PropertiesPanel({
+  selectedNode,
+  nodes = [],
+  edges = [],
+  onGenerateMedia,
+  onEditNode,
+  isProcessing,
+  onClose,
+}: PropertiesPanelProps) {
+  const [tab, setTab] = useState<"shot" | "media" | "continuity" | "advanced">("media");
+  const tabTriggerClass =
+    "border border-transparent text-muted-foreground data-[state=active]:border-primary/40 data-[state=active]:bg-primary/15 data-[state=active]:text-foreground";
 
-   if (!selectedNode) return null;
-   const { data, id } = selectedNode;
+  const [mediaType, setMediaType] = useState<MediaType>(MediaType.IMAGE);
+  const [promptOverride, setPromptOverride] = useState("");
+  const [promptOpen, setPromptOpen] = useState(false);
 
-   // Logic to find Next Node (End Image)
-   const getNextNode = () => {
-      const edge = edges.find(e => e.source === id);
-      if (edge) {
-         return nodes.find(n => n.id === edge.target);
-      }
-      return null;
-   };
-   const nextNode = getNextNode();
-   const endImage = nextNode?.data?.image;
+  // Media config
+  const [style, setStyle] = useState("");
+  const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [negativePrompt, setNegativePrompt] = useState(defaultNegativePrompt);
+  const [voice, setVoice] = useState<VoiceName>("Kore");
+  const [duration, setDuration] = useState("5");
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [slowMotion, setSlowMotion] = useState(false);
 
-   const handleGenerate = () => {
-      // Determine config based on type
-      let config: any = {};
-      if (mediaType === MediaType.AUDIO) config = { voice };
-      if (mediaType === MediaType.IMAGE) {
-         // Determine effective input image
-         const effectiveInputImage = inputImage?.dataUrl || (!showUpload && data.image ? data.image : undefined);
-         config = { style, aspectRatio, inputImage: effectiveInputImage };
-      }
-      if (mediaType === MediaType.VIDEO) {
-         // LTX-2 Config
-         config = {
-            aspectRatio,
-            negativePrompt,
-            startImage: data.image, // Use current node image as start
-            endImage: endImage, // Use next node image as end (if available)
-            audioEnabled,
-            slowMotion,
-            duration: Number(duration)
-         };
-      }
+  const [rewriteInstruction, setRewriteInstruction] = useState("");
 
-      // Use specific prompt or fall back to segment text
-      const finalPrompt = prompt || data.segment;
-      onGenerateMedia(id, mediaType, finalPrompt, config);
-   };
+  const promptPreview = useMemo(() => {
+    if (!selectedNode) return "";
+    return (promptOverride.trim() ? promptOverride.trim() : selectedNode.data.segment).trim();
+  }, [promptOverride, selectedNode]);
 
-   return (
-      <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden w-[340px] animate-in fade-in zoom-in-95 duration-200">
-         {/* Header */}
-         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white">
-            <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-               <SparklesIcon className="w-4 h-4 text-blue-500" />
-               {activeTab === 'EDIT' ? 'Edit Node' : 'Generate Media'}
-            </h2>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 rounded-full p-1 hover:bg-gray-50">
-               <XMarkIcon className="w-4 h-4" />
-            </button>
-         </div>
+  if (!selectedNode) return null;
+  const { id, data } = selectedNode;
+  const nextNode = getNextNode(id, nodes, edges);
+  const endImage = nextNode?.data?.image;
 
-         {/* Mode Switcher */}
-         <div className="flex p-1 bg-gray-50 m-4 rounded-lg border border-gray-100">
-            <button
-               onClick={() => setActiveTab('MEDIA')}
-               className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${activeTab === 'MEDIA' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-               Create Media
-            </button>
-            <button
-               onClick={() => setActiveTab('EDIT')}
-               className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${activeTab === 'EDIT' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-               Edit Text
-            </button>
-         </div>
+  const continuityBadge =
+    data.continuity.consistencyStatus === "ok"
+      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/20"
+      : data.continuity.consistencyStatus === "warning"
+        ? "bg-amber-500/15 text-amber-200 border-amber-500/20"
+        : "bg-rose-500/15 text-rose-200 border-rose-500/20";
 
-         <div className="px-4 pb-4 max-h-[calc(100vh-200px)] overflow-y-auto">
-            {activeTab === 'MEDIA' ? (
-               <div className="space-y-4">
-                  {/* Type Selector */}
-                  <div className="grid grid-cols-3 gap-2">
-                     <button
-                        onClick={() => setMediaType(MediaType.IMAGE)}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${mediaType === MediaType.IMAGE ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 hover:border-gray-300 text-gray-600'}`}
-                     >
-                        <PhotoIcon className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-medium">Image</span>
-                     </button>
-                     <button
-                        onClick={() => setMediaType(MediaType.VIDEO)}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${mediaType === MediaType.VIDEO ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 hover:border-gray-300 text-gray-600'}`}
-                     >
-                        <VideoCameraIcon className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-medium">Video</span>
-                     </button>
-                     <button
-                        onClick={() => setMediaType(MediaType.AUDIO)}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${mediaType === MediaType.AUDIO ? 'border-pink-500 bg-pink-50 text-pink-700' : 'border-gray-200 hover:border-gray-300 text-gray-600'}`}
-                     >
-                        <MusicalNoteIcon className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-medium">Audio</span>
-                     </button>
-                  </div>
+  const handleGenerate = () => {
+    let config: StoryboardMediaConfig = {};
+    if (mediaType === MediaType.AUDIO) {
+      config = { voice };
+    }
+    if (mediaType === MediaType.IMAGE) {
+      config = { style, aspectRatio, inputImage: data.image };
+    }
+    if (mediaType === MediaType.VIDEO) {
+      config = {
+        aspectRatio,
+        negativePrompt,
+        startImage: data.image,
+        endImage,
+        audioEnabled,
+        slowMotion,
+        duration: Number(duration),
+      };
+    }
 
-                  {/* Config Inputs */}
-                  <div className="space-y-3">
-                     {mediaType === MediaType.AUDIO ? (
-                        <div>
-                           <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Voice</label>
-                           <select
-                              value={voice}
-                              onChange={(e) => setVoice(e.target.value as VoiceName)}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                           >
-                              <option value="Kore">Kore (Balanced)</option>
-                              <option value="Puck">Puck (Energetic)</option>
-                              <option value="Charon">Charon (Deep)</option>
-                              <option value="Fenrir">Fenrir (Intense)</option>
-                              <option value="Zephyr">Zephyr (Calm)</option>
-                           </select>
-                        </div>
-                     ) : (
-                        <>
-                           {mediaType === MediaType.IMAGE && (
-                              <>
-                                 <div>
-                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Aspect Ratio</label>
-                                    <select
-                                       value={aspectRatio}
-                                       onChange={(e) => setAspectRatio(e.target.value)}
-                                       className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                                    >
-                                       <option value="16:9">Landscape (16:9)</option>
-                                       <option value="1:1">Square (1:1)</option>
-                                       <option value="9:16">Portrait (9:16)</option>
-                                    </select>
-                                 </div>
-                                 <div>
-                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Style</label>
-                                    <input
-                                       type="text"
-                                       value={style}
-                                       onChange={(e) => setStyle(e.target.value)}
-                                       placeholder="e.g. Cinematic, Realistic"
-                                       className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                                    />
-                                 </div>
-                                 <div>
-                                    {data.image && !inputImage && !showUpload ? (
-                                       <div className="relative rounded-lg border border-gray-200 overflow-hidden bg-gray-50 mb-2">
-                                          <div className="relative aspect-video bg-black/5 group">
-                                             <img
-                                                src={data.image}
-                                                alt="Generated Input"
-                                                className="w-full h-full object-contain"
-                                             />
-                                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                                          </div>
-                                          <div className="p-2 border-t border-gray-200 bg-white">
-                                             <div className="flex items-center gap-2 mb-2">
-                                                <SparklesIcon className="w-3 h-3 text-purple-500" />
-                                                <span className="text-[10px] font-medium text-gray-600">Using Generated Image</span>
-                                             </div>
-                                             <button
-                                                onClick={() => setShowUpload(true)}
-                                                className="w-full py-1.5 px-3 bg-white border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-200 rounded-md text-[10px] font-medium transition-all shadow-sm flex items-center justify-center gap-1"
-                                             >
-                                                <PhotoIcon className="w-3 h-3" />
-                                                Upload Different Image
-                                             </button>
-                                          </div>
-                                       </div>
-                                    ) : (
-                                       <>
-                                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Input Image (Optional)</label>
-                                          {inputImage ? (
-                                             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mb-2">
-                                                <img src={inputImage.dataUrl} alt="Input" className="w-10 h-10 rounded object-cover" />
-                                                <span className="flex-1 text-xs text-gray-600 truncate">{inputImage.file.name}</span>
-                                                <button onClick={() => setInputImage(null)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
-                                             </div>
-                                          ) : (
-                                             <label className="flex items-center justify-center gap-2 py-2 px-3 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 hover:border-gray-300 transition-colors mb-2">
-                                                <PhotoIcon className="w-4 h-4 text-gray-400" />
-                                                <span className="text-xs text-gray-500">Upload Image</span>
-                                                <input
-                                                   type="file"
-                                                   accept="image/*"
-                                                   className="hidden"
-                                                   onChange={(e) => {
-                                                      const file = e.target.files?.[0];
-                                                      if (file) {
-                                                         const reader = new FileReader();
-                                                         reader.onload = (ev) => setInputImage({ file, dataUrl: ev.target?.result as string });
-                                                         reader.readAsDataURL(file);
-                                                      }
-                                                   }}
-                                                />
-                                             </label>
-                                          )}
-                                          {data.image && (
-                                             <div className='flex items-center justify-end'>
-                                                <button
-                                                   onClick={() => {
-                                                      setInputImage(null);
-                                                      setShowUpload(false);
-                                                   }}
-                                                   className="text-[10px] text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-colors"
-                                                >
-                                                   <SparklesIcon className="w-3 h-3" />
-                                                   Use Generated Image
-                                                </button>
-                                             </div>
-                                          )}
-                                       </>
-                                    )}
-                                 </div>
-                              </>
-                           )}
+    onGenerateMedia(id, mediaType, promptPreview, config);
+  };
 
-                           <div>
-                              <div className="flex justify-between items-center mb-1">
-                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Prompt (Optional)</label>
-                                 <button
-                                    onClick={() => setPrompt(prev => prev ? '' : data.segment)}
-                                    className="flex items-center gap-1 text-[10px] text-blue-600 hover:text-blue-800"
-                                 >
-                                    <PencilIcon className="w-3 h-3" />
-                                    Use Node Text
-                                 </button>
-                              </div>
-                              <textarea
-                                 value={prompt}
-                                 onChange={(e) => setPrompt(e.target.value)}
-                                 placeholder={data.segment}
-                                 className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none h-16 resize-none mb-2"
-                              />
+  const handleRewrite = () => {
+    if (!rewriteInstruction.trim()) return;
+    onEditNode(id, rewriteInstruction.trim());
+    setRewriteInstruction("");
+  };
 
-                              {/* Negative Prompt for Video */}
-                              {mediaType === MediaType.VIDEO && (
-                                 <>
-                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Negative Prompt</label>
-                                    <textarea
-                                       value={negativePrompt}
-                                       onChange={(e) => setNegativePrompt(e.target.value)}
-                                       className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none h-12 resize-none text-gray-500"
-                                    />
-
-                                    <div className="mt-4 space-y-4">
-                                       {/* LTX-2 Info Badge */}
-                                       <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 rounded-lg border border-purple-100 text-purple-700 text-xs font-medium">
-                                          <span className="flex items-center justify-center w-5 h-5 bg-purple-200 rounded text-[10px]">L2</span>
-                                          LTX-2 Model
-                                       </div>
-
-                                       {/* Start & End Frames */}
-                                       <div className="grid grid-cols-2 gap-3">
-                                          {/* Start Frame */}
-                                          <div className="space-y-1">
-                                             <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Start Frame</label>
-                                             <div className="aspect-video rounded-lg border border-gray-200 bg-gray-50 overflow-hidden relative">
-                                                {data.image ? (
-                                                   <img src={data.image} className="w-full h-full object-cover" />
-                                                ) : (
-                                                   <div className="w-full h-full flex items-center justify-center text-gray-300">
-                                                      <PhotoIcon className="w-6 h-6" />
-                                                   </div>
-                                                )}
-                                                <div className="absolute top-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">This Node</div>
-                                             </div>
-                                          </div>
-                                          {/* End Frame */}
-                                          <div className="space-y-1">
-                                             <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">End Frame</label>
-                                             <div className="aspect-video rounded-lg border border-gray-200 bg-gray-50 overflow-hidden relative">
-                                                {endImage ? (
-                                                   <img src={endImage} className="w-full h-full object-cover" />
-                                                ) : (
-                                                   <div className="w-full h-full flex items-center justify-center text-gray-300">
-                                                      <span className="text-[8px] text-center px-2">No Next Node Image</span>
-                                                   </div>
-                                                )}
-                                                <div className="absolute top-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">Next Node</div>
-                                             </div>
-                                          </div>
-                                       </div>
-
-                                       {/* Row: Ratio & Duration */}
-                                       <div className="grid grid-cols-2 gap-3">
-                                          <div>
-                                             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Ratio</label>
-                                             <select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} className="w-full text-xs p-2 rounded-lg border border-gray-200 bg-white focus:outline-none">
-                                                <option value="16:9">16:9</option>
-                                                <option value="9:16">9:16</option>
-                                             </select>
-                                          </div>
-                                          <div>
-                                             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Duration</label>
-                                             <select value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full text-xs p-2 rounded-lg border border-gray-200 bg-white focus:outline-none">
-                                                <option value="5">5 Seconds</option>
-                                                <option value="10">10 Seconds</option>
-                                             </select>
-                                          </div>
-                                       </div>
-
-                                       {/* Toggles */}
-                                       <div className="flex items-center gap-4 pt-1">
-                                          <label className="flex items-center gap-2 cursor-pointer group">
-                                             <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${audioEnabled ? 'bg-blue-500 border-blue-500' : 'border-gray-300 bg-white'}`}>
-                                                {audioEnabled && <div className="w-2 h-2 bg-white rounded-[1px]" />}
-                                             </div>
-                                             <input type="checkbox" checked={audioEnabled} onChange={e => setAudioEnabled(e.target.checked)} className="hidden" />
-                                             <span className="text-xs font-medium text-gray-600 group-hover:text-gray-800">Audio</span>
-                                          </label>
-
-                                          <label className="flex items-center gap-2 cursor-pointer group">
-                                             <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${slowMotion ? 'bg-blue-500 border-blue-500' : 'border-gray-300 bg-white'}`}>
-                                                {slowMotion && <div className="w-2 h-2 bg-white rounded-[1px]" />}
-                                             </div>
-                                             <input type="checkbox" checked={slowMotion} onChange={e => setSlowMotion(e.target.checked)} className="hidden" />
-                                             <span className="text-xs font-medium text-gray-600 group-hover:text-gray-800">Slow Motion</span>
-                                          </label>
-                                       </div>
-                                    </div>
-                                 </>
-                              )}
-                           </div>
-                        </>
-                     )}
-                  </div>
-
-                  <button
-                     onClick={handleGenerate}
-                     disabled={isProcessing}
-                     className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
-                  >
-                     {isProcessing ? 'Generating...' : 'Generate'}
-                  </button>
-               </div>
-            ) : (
-               <div className="space-y-3">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Narrative Text</label>
-                  <textarea
-                     defaultValue={data.segment}
-                     onChange={(e) => setPrompt(e.target.value)}
-                     className="w-full text-xs p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none h-32 resize-none"
-                  />
-                  <button
-                     onClick={() => {
-                        if (prompt) onEditNode(id, prompt);
-                     }}
-                     disabled={isProcessing}
-                     className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
-                  >
-                     Update Text
-                  </button>
-               </div>
-            )}
-         </div>
+  return (
+    <div className="h-full w-full">
+      <div className="flex items-start justify-between gap-3 p-4 border-b border-border/60">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold truncate">{data.label}</div>
+            <Badge variant="secondary" className="text-[10px]">
+              {data.nodeType}
+            </Badge>
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground line-clamp-2">{data.segment}</div>
+        </div>
+        <Button variant="ghost" size="sm" className="h-8" onClick={onClose}>
+          Close
+        </Button>
       </div>
-   );
-};
 
-export default PropertiesPanel;
+      <div className="p-4">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+          <TabsList className="grid w-full grid-cols-4 bg-background/70 border border-border/70 p-1">
+            <TabsTrigger value="shot" className={tabTriggerClass}>Shot</TabsTrigger>
+            <TabsTrigger value="media" className={tabTriggerClass}>Media</TabsTrigger>
+            <TabsTrigger value="continuity" className={tabTriggerClass}>Continuity</TabsTrigger>
+            <TabsTrigger value="advanced" className={tabTriggerClass}>Advanced</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="shot" className="mt-4 space-y-4">
+            <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                Rewrite Node
+              </div>
+              <div className="mt-2 text-xs text-muted-foreground">
+                Give a director-style instruction. The agent will propose an edit.
+              </div>
+              <div className="mt-3 flex gap-2">
+                <Input
+                  value={rewriteInstruction}
+                  onChange={(e) => setRewriteInstruction(e.target.value)}
+                  placeholder='e.g. "Make this more tense and add a reveal at the end."'
+                  className="bg-background/60"
+                  disabled={isProcessing}
+                />
+                <Button onClick={handleRewrite} disabled={!rewriteInstruction.trim() || isProcessing} className="gap-2">
+                  <Wand2 className="size-4" />
+                  Rewrite
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                Selected
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg bg-background/60 border border-border/60 px-3 py-2">
+                  <div className="text-[10px] text-muted-foreground">Type</div>
+                  <div className="mt-0.5 font-medium">{data.nodeType}</div>
+                </div>
+                <div className="rounded-lg bg-background/60 border border-border/60 px-3 py-2">
+                  <div className="text-[10px] text-muted-foreground">Continuity</div>
+                  <div className={cn("mt-0.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px]", continuityBadge)}>
+                    {data.continuity.consistencyStatus}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="media" className="mt-4 space-y-4">
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              Output Type
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "h-12 gap-2 justify-start border border-border/70 bg-background/40 hover:bg-background/70",
+                  mediaType === MediaType.IMAGE
+                    && "border-primary/50 bg-primary/15 text-foreground shadow-[inset_0_0_0_1px_rgba(163,230,53,0.32)]",
+                )}
+                onClick={() => setMediaType(MediaType.IMAGE)}
+                aria-pressed={mediaType === MediaType.IMAGE}
+              >
+                <ImageIcon className="size-4" /> Image
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "h-12 gap-2 justify-start border border-border/70 bg-background/40 hover:bg-background/70",
+                  mediaType === MediaType.VIDEO
+                    && "border-primary/50 bg-primary/15 text-foreground shadow-[inset_0_0_0_1px_rgba(163,230,53,0.32)]",
+                )}
+                onClick={() => setMediaType(MediaType.VIDEO)}
+                aria-pressed={mediaType === MediaType.VIDEO}
+              >
+                <Video className="size-4" /> Video
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "h-12 gap-2 justify-start border border-border/70 bg-background/40 hover:bg-background/70",
+                  mediaType === MediaType.AUDIO
+                    && "border-primary/50 bg-primary/15 text-foreground shadow-[inset_0_0_0_1px_rgba(163,230,53,0.32)]",
+                )}
+                onClick={() => setMediaType(MediaType.AUDIO)}
+                aria-pressed={mediaType === MediaType.AUDIO}
+              >
+                <Music className="size-4" /> Audio
+              </Button>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {mediaType === MediaType.IMAGE
+                ? "Still frame generation for scene and shot look development."
+                : mediaType === MediaType.VIDEO
+                  ? "Motion preview generation with optional audio and continuity directives."
+                  : "Voice scratch track for timing and story beats."}
+            </div>
+
+            <Collapsible open={promptOpen} onOpenChange={setPromptOpen}>
+              <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                    Prompt
+                  </div>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
+                      {promptOpen ? "Hide" : "Edit"}
+                    </Button>
+                  </CollapsibleTrigger>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground line-clamp-3">
+                  {promptPreview}
+                </div>
+                <CollapsibleContent className="mt-3 space-y-2">
+                  <Textarea
+                    value={promptOverride}
+                    onChange={(e) => setPromptOverride(e.target.value)}
+                    placeholder={data.segment}
+                    className="min-h-[92px] bg-background/60"
+                    disabled={isProcessing}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => setPromptOverride("")}
+                    disabled={isProcessing || !promptOverride}
+                  >
+                    Use node text
+                  </Button>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+
+            <Button onClick={handleGenerate} disabled={isProcessing} className="w-full h-11 gap-2">
+              <Sparkles className="size-4" />
+              {mediaType === MediaType.IMAGE ? "Generate Image" : mediaType === MediaType.VIDEO ? "Generate Video" : "Generate Audio"}
+            </Button>
+          </TabsContent>
+
+          <TabsContent value="continuity" className="mt-4 space-y-4">
+            <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  Rolling History
+                </div>
+                <div className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px]", continuityBadge)}>
+                  {data.continuity.consistencyStatus}
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap">
+                {data.historyContext.rollingSummary || "No rolling history summary yet."}
+              </div>
+              <Separator className="my-3" />
+              <div className="text-[11px] text-muted-foreground">
+                lineage: <span className="text-foreground/80">{data.historyContext.lineageHash || "pending"}</span>
+                {"  "}· tokens:{" "}
+                <span className="text-foreground/80">{data.historyContext.tokenBudgetUsed}</span>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="advanced" className="mt-4 space-y-4">
+            <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+              <div className="flex items-center gap-2">
+                <Settings2 className="size-4 text-muted-foreground" />
+                <div className="text-sm font-semibold">Advanced</div>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Optional controls for camera, motion, and negatives.
+              </div>
+            </div>
+
+            {mediaType === MediaType.IMAGE ? (
+              <div className="rounded-xl border border-border/60 bg-card/40 p-3 space-y-3">
+                <Field label="Aspect ratio">
+                  <Input value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} disabled={isProcessing} />
+                </Field>
+                <Field label="Style">
+                  <Input value={style} onChange={(e) => setStyle(e.target.value)} placeholder="e.g. cinematic, anamorphic" disabled={isProcessing} />
+                </Field>
+              </div>
+            ) : null}
+
+            {mediaType === MediaType.VIDEO ? (
+              <div className="rounded-xl border border-border/60 bg-card/40 p-3 space-y-3">
+                <Field label="Aspect ratio">
+                  <Input value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)} disabled={isProcessing} />
+                </Field>
+                <Field label="Negative prompt">
+                  <Textarea
+                    value={negativePrompt}
+                    onChange={(e) => setNegativePrompt(e.target.value)}
+                    className="min-h-[80px] bg-background/60"
+                    disabled={isProcessing}
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Toggle
+                    label="Audio"
+                    value={audioEnabled}
+                    onChange={setAudioEnabled}
+                    disabled={isProcessing}
+                  />
+                  <Toggle
+                    label="Slow motion"
+                    value={slowMotion}
+                    onChange={setSlowMotion}
+                    disabled={isProcessing}
+                  />
+                </div>
+                <Field label="Duration (seconds)">
+                  <Input value={duration} onChange={(e) => setDuration(e.target.value)} disabled={isProcessing} />
+                </Field>
+                <div className="text-[11px] text-muted-foreground">
+                  Start frame uses this node&apos;s image. End frame uses the next node image when available.
+                </div>
+              </div>
+            ) : null}
+
+            {mediaType === MediaType.AUDIO ? (
+              <div className="rounded-xl border border-border/60 bg-card/40 p-3 space-y-3">
+                <Field label="Voice">
+                  <Input value={voice} onChange={(e) => setVoice(e.target.value as VoiceName)} disabled={isProcessing} />
+                </Field>
+                <div className="text-[11px] text-muted-foreground">
+                  Voice presets: Puck, Charon, Kore, Fenrir, Zephyr.
+                </div>
+              </div>
+            ) : null}
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function Toggle({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange(!value)}
+      className={cn(
+        "rounded-lg border px-3 py-2 text-left transition-colors",
+        "border-border/60 bg-background/60 hover:bg-background/80",
+        value && "border-primary/40 ring-1 ring-primary/30",
+        disabled && "opacity-60 cursor-not-allowed",
+      )}
+    >
+      <div className="text-xs font-medium">{label}</div>
+      <div className="text-[11px] text-muted-foreground mt-0.5">{value ? "On" : "Off"}</div>
+    </button>
+  );
+}

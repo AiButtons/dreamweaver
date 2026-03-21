@@ -1,7 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { PaperAirplaneIcon } from '@heroicons/react/24/solid';
-import { ChatMessage, StoryNode } from '@/app/storyboard/types';
-import ContextWidget from './ContextWidget';
+import React, { useMemo, useRef, useState } from "react";
+import { Sparkles, Send, ChevronDown } from "lucide-react";
+import { ChatMessage, StoryNode } from "@/app/storyboard/types";
+import ContextWidget from "./ContextWidget";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -18,104 +23,139 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   selectedNode,
   onClearSelection
 }) => {
-  const [input, setInput] = useState('A group of friends enters a haunted mansion, each taking a different hallway that leads to strange encounters before they reunite.');
+  const [input, setInput] = useState("");
+  const [showConversation, setShowConversation] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+  const quickActions = useMemo(() => {
+    if (selectedNode) {
+      return [
+        {
+          label: "Expand into shots",
+          prompt: `Expand node "${selectedNode.data.label}" into 6-10 shot nodes with cinematic coverage.`,
+        },
+        {
+          label: "Continuity check",
+          prompt: `Check continuity for node "${selectedNode.data.label}" and propose fixes if needed.`,
+        },
+        {
+          label: "Generate prompt pack",
+          prompt: `Create an image prompt pack for node "${selectedNode.data.label}" using rolling history and character consistency.`,
+        },
+      ];
     }
-  }, [input]);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    return [
+      { label: "Draft 6-scene outline", prompt: "Draft a 6-scene outline for this story with escalating stakes." },
+      { label: "Add main characters", prompt: "Propose 3-5 main characters with distinct motivations and arcs." },
+      { label: "Branch an alternate ending", prompt: "Propose a branch for an alternate ending and where it splits." },
+    ];
+  }, [selectedNode]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isGenerating) {
       onSendMessage(input);
-      setInput('');
+      setInput("");
     }
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border-r border-gray-200 shadow-sm relative">
-      <div className="p-4 border-b border-gray-100 bg-white">
-        <h2 className="text-gray-800 font-bold flex items-center gap-2 text-lg">
-          StoryNodes
-        </h2>
-        <p className="text-xs text-gray-500 mt-1">AI Storytelling Assistant</p>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-32" ref={scrollRef}>
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-          >
-            <div
-              className={`max-w-[90%] rounded-2xl px-5 py-3 text-sm leading-relaxed shadow-sm ${msg.role === 'user'
-                ? 'bg-blue-600 text-white rounded-br-none'
-                : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'
-                }`}
-            >
-              {msg.content}
+    <div className="h-full flex flex-col border-r border-border/60 bg-background/40">
+      <div className="px-4 pt-4 pb-3 border-b border-border/60 bg-background/40">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="size-4 text-primary" />
+              <div className="text-sm font-semibold tracking-tight">Assistant</div>
             </div>
-            <span className="text-[10px] text-gray-400 mt-1 px-1">
-              {msg.role === 'user' ? 'You' : 'AI Assistant'}
-            </span>
-          </div>
-        ))}
-        {isGenerating && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 rounded-2xl rounded-bl-none px-4 py-3 border border-gray-200">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-              </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {selectedNode ? "Director notes for the selected node." : "High-level story direction and drafting."}
             </div>
           </div>
-        )}
-      </div>
+          <Collapsible open={showConversation} onOpenChange={setShowConversation}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 gap-1">
+                Conversation
+                <ChevronDown className={cn("size-4 transition-transform", showConversation && "rotate-180")} />
+              </Button>
+            </CollapsibleTrigger>
+          </Collapsible>
+        </div>
 
-      {/* Input Area Wrapper */}
-      <div className="absolute bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-gray-100">
-        {/* Context Widget Floating Above Input */}
-        {selectedNode && (
-          <ContextWidget selectedNode={selectedNode} onClearSelection={onClearSelection} />
-        )}
-
-        <form onSubmit={handleSubmit} className="p-4 pt-2">
-          <div className="relative shadow-sm rounded-xl">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder={selectedNode ? `Edit "${selectedNode.data.label}"...` : "Type a story prompt or instruction..."}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {quickActions.map((action) => (
+            <Button
+              key={action.label}
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="h-8"
               disabled={isGenerating}
-              className={`w-full bg-gray-50 text-gray-900 placeholder-gray-400 rounded-xl pl-4 pr-12 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-200 disabled:opacity-50 transition-all resize-none overflow-hidden min-h-[46px] max-h-[200px] ${selectedNode ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/30' : ''}`}
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || isGenerating}
-              className="absolute right-2 bottom-2 p-2 text-blue-600 hover:text-blue-700 disabled:text-gray-400 transition-colors"
+              onClick={() => {
+                setInput(action.prompt);
+              }}
             >
-              <PaperAirplaneIcon className="w-5 h-5" />
-            </button>
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <Collapsible open={showConversation} onOpenChange={setShowConversation}>
+        <CollapsibleContent className="border-b border-border/60">
+          <ScrollArea className="h-[40vh]">
+            <div className="p-4 space-y-4" ref={scrollRef}>
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={cn("flex flex-col", msg.role === "user" ? "items-end" : "items-start")}
+                >
+                  <div
+                    className={cn(
+                      "max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-relaxed border",
+                      msg.role === "user"
+                        ? "bg-primary text-primary-foreground border-primary/20 rounded-br-none"
+                        : "bg-card/60 text-foreground border-border/60 rounded-bl-none",
+                    )}
+                  >
+                    {msg.content}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground mt-1 px-1">
+                    {msg.role === "user" ? "You" : "Assistant"}
+                  </span>
+                </div>
+              ))}
+              {isGenerating ? (
+                <div className="text-xs text-muted-foreground">Thinking...</div>
+              ) : null}
+            </div>
+          </ScrollArea>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <div className="mt-auto p-4">
+        {selectedNode ? (
+          <div className="mb-3">
+            <ContextWidget selectedNode={selectedNode} onClearSelection={onClearSelection} />
+          </div>
+        ) : null}
+
+        <form onSubmit={handleSubmit} className="space-y-2">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={selectedNode ? `Give direction for "${selectedNode.data.label}"...` : "Give a director note or drafting instruction..."}
+            disabled={isGenerating}
+            className="min-h-[84px] bg-background/60"
+          />
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] text-muted-foreground">
+              Enter to send. Shift+Enter for newline.
+            </div>
+            <Button type="submit" disabled={!input.trim() || isGenerating} className="gap-2">
+              <Send className="size-4" />
+              Send
+            </Button>
           </div>
         </form>
       </div>

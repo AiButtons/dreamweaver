@@ -144,5 +144,6 @@ def initialize_providers() -> None:
     modal_provider = ModalImageProvider()
     ProviderRegistry.register_image_provider(modal_provider)
     
-    print(f"✅ Registered providers: {list(ProviderRegistry.list_providers().keys())}")
-    print(f"✅ Available models: {ProviderRegistry.list_models()}")
+    print(f"Registered providers: {list(ProviderRegistry.list_providers().keys())}")
+    print(f"Available models: {ProviderRegistry.list_models()}")
+

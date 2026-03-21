@@ -1,5 +1,7 @@
 import React from 'react';
 import './storyboard.css'; // Import the specific CSS
+import "@copilotkit/react-ui/styles.css";
+import { StoryboardCopilotProvider } from "@/components/storyboard/StoryboardCopilotProvider";
 
 export default function StoryboardLayout({
     children,
@@ -7,9 +9,10 @@ export default function StoryboardLayout({
     children: React.ReactNode;
 }) {
     return (
-        <div className="storyboard-layout h-screen w-full bg-white text-slate-900">
-            {/* Ensure full screen and isolation from main app styles if necessary */}
-            {children}
-        </div>
+        <StoryboardCopilotProvider>
+            <div className="storyboard-layout h-screen w-full bg-background text-foreground">
+                {children}
+            </div>
+        </StoryboardCopilotProvider>
     );
 }

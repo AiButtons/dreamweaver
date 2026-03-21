@@ -140,14 +140,14 @@ class ModalVideoProvider(VideoProvider):
                  # Assume binary video content
                  from utils.file_upload import upload_bytes
                  
-                 print("   🎥 Received binary video content. Uploading to storage...")
+                 print("   Received binary video content. Uploading to storage...")
                  # Generate a filename
                  filename = f"ltx2_{request.get('seed', 'rnd')}.mp4"
                  
                  # Upload raw bytes
                  video_url = upload_bytes(response.content, filename)
                  
-                 print(f"   ✅ Video uploaded to: {video_url}")
+                 print(f"   Video uploaded to: {video_url}")
                  
                  return {
                     "id": f"vid_{request.get('seed', 'rnd')}",

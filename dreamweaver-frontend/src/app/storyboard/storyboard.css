@@ -6,15 +6,16 @@
 
 .react-flow__node {
     border: none !important;
-    border-radius: 16px !important;
-    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1) !important;
+    border-radius: 20px !important;
+    box-shadow: none !important;
+    background: transparent !important;
 }
 
 .react-flow__handle {
     width: 10px !important;
     height: 10px !important;
-    background: #64748b !important;
-    border: 2px solid white !important;
+    background: rgba(255, 255, 255, 0.35) !important;
+    border: 2px solid rgba(0, 0, 0, 0.65) !important;
 }
 
 /* Custom scrollbar */
@@ -28,10 +29,10 @@
 }
 
 .storyboard-scroll ::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
+    background: rgba(255, 255, 255, 0.18);
     border-radius: 3px;
 }
 
 .storyboard-scroll ::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: rgba(255, 255, 255, 0.28);
 }

@@ -11,16 +11,15 @@ from api.routes import router as api_router
 from api.video import router as video_router
 from config.settings import settings
 from providers.registry import initialize_providers
-# Include API routes
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    print(f"🚀 Dreamweaver API starting...")
-    print(f"📍 OpenAI API Key configured: {'Yes' if settings.openai_api_key else 'No'}")
-    
+    print("Dreamweaver API starting...")
+    print(f"OpenAI API Key configured: {'Yes' if settings.openai_api_key else 'No'}")
+
     # Debug: Print allowed origins
     origins = [
         "http://localhost:3000",
@@ -29,14 +28,14 @@ async def lifespan(app: FastAPI):
         "http://127.0.0.1:3001",
         "https://dreamweaver-s6j9.vercel.app",
     ]
-    print(f"🌍 Allowed Origins: {origins}")
-    
+    print(f"Allowed Origins: {origins}")
+
     # Initialize providers
     initialize_providers()
-    
+
     yield
     # Shutdown
-    print("👋 Dreamweaver API shutting down...")
+    print("Dreamweaver API shutting down...")
 
 
 app = FastAPI(

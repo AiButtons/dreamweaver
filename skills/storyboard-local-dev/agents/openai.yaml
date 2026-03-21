@@ -1,0 +1,4 @@
+interface:
+  display_name: "Storyboard Local Dev"
+  short_description: "Start local Dreamweaver backend + LangGraph + frontend stack"
+  default_prompt: "Start my local Dreamweaver storyboard stack (backend, LangGraph, frontend), verify ports, and show logs/PIDs."

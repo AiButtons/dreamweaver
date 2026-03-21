@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Dreamweaver Frontend (Bun)
 
-## Getting Started
+Next.js 16 frontend for Dreamweaver.
 
-First, run the development server:
+- Image/video generation calls FastAPI.
+- Generations and storyboard graph state persist in Convex.
+- Auth uses Better Auth + Convex.
+- Storyboard copilot uses CopilotKit runtime + LangGraph agent service.
 
+## Setup
+
+1. Install deps:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Configure env in `.env`:
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8001
+NEXT_PUBLIC_CONVEX_URL=<your-convex-url>
+CONVEX_DEPLOYMENT=<your-deployment-name>
+CONVEX_SITE_URL=<your-convex-site-url>
+SITE_URL=http://localhost:3000
+BETTER_AUTH_SECRET=<long-random-secret>
+LANGGRAPH_STORYBOARD_DEPLOYMENT_URL=http://localhost:8123
+LANGSMITH_API_KEY=<optional>
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Generate Better Auth schema for Convex:
+```bash
+bun run auth:generate-schema
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. Run Convex dev backend:
+```bash
+bun run convex:dev
+```
 
-## Learn More
+5. Run Next.js app:
+```bash
+bun run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Key paths
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Convex schema/functions:
+  - `convex/schema.ts`
+  - `convex/storyboards.ts`
+  - `convex/approvals.ts`
+  - `convex/mediaAssets.ts`
+  - `convex/entities.ts`
+  - `convex/agentRuns.ts`
+  - `convex/generations.ts`
+- Better Auth + Convex wiring: `convex/auth.ts`, `convex/auth.config.ts`, `convex/betterAuth/*`
+- Better Auth API route: `src/app/api/auth/[...all]/route.ts`
+- Convex provider wiring (official): `src/components/ConvexClientProvider.tsx`, `src/app/layout.tsx`
+- Copilot runtime route: `src/app/api/copilotkit/storyboard/route.ts`
+- Storyboard copilot bridge: `src/components/storyboard/StoryboardCopilotBridge.tsx`
+- Storyboard page (Convex-backed graph): `src/app/storyboard/page.tsx`

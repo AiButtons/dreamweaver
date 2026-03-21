@@ -1,0 +1,15 @@
+{
+  "python_version": "3.12",
+  "dockerfile_lines": [],
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "storyboard_agent": "./agent.py:graph"
+  },
+  "http": {
+    "app": "./server.py:app"
+  },
+  "env": ".env"
+}
+

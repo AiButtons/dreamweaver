@@ -83,6 +83,25 @@ class ImageGenerationResponse(BaseModel):
     images: list[dict[str, Any]]
 
 
+class ImageComposeRequest(BaseModel):
+    """API request model for multi-reference image composition."""
+    prompt: str
+    input_images: list[str]
+    style: Optional[str] = None
+    aspect_ratio: str = "16:9"
+    model_id: str = "gpt-image-1"
+    quality: str = "standard"
+    batch_size: int = 1
+
+
+class ImageComposeResponse(BaseModel):
+    """API response model for multi-reference image composition."""
+    id: str
+    prompt: str
+    model: str
+    images: list[dict[str, Any]]
+
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -284,3 +303,64 @@ async def list_models():
             for model in IMAGE_MODELS
         ]
     }
+
+
+@router.post("/compose", response_model=ImageComposeResponse)
+async def compose_image(request: ImageComposeRequest):
+    """
+    Compose a scene image from multiple references and text instructions.
+    """
+    if not request.input_images:
+        raise HTTPException(status_code=400, detail="input_images must include at least one reference image")
+
+    try:
+        provider = ProviderRegistry.get_image_provider(request.model_id)
+    except ProviderError as error:
+        raise HTTPException(status_code=400, detail=str(error.message))
+
+    composed_prompt = (
+        f"{request.prompt}\n\n"
+        "Continuity directives: preserve immutable character identity features, allow requested wardrobe/style changes."
+    )
+
+    provider_request = ProviderRequest(
+        prompt=composed_prompt,
+        model_id=request.model_id,
+        size=map_resolution_to_size("fhd", request.aspect_ratio),
+        quality=map_quality(request.quality),
+        style=ImageStyle(request.style) if request.style else None,
+        n=request.batch_size,
+        extra_params={
+            "input_images": request.input_images,
+            "composition_mode": "multi_reference",
+            "aspect_ratio": request.aspect_ratio,
+        },
+    )
+
+    try:
+        response = await provider.generate(provider_request)
+        return ImageComposeResponse(
+            id=response.id,
+            prompt=composed_prompt,
+            model=response.model,
+            images=[
+                {
+                    "url": image.url,
+                    "b64_json": image.b64_json,
+                    "revised_prompt": image.revised_prompt,
+                }
+                for image in response.images
+            ],
+        )
+    except ProviderError as error:
+        raise HTTPException(
+            status_code=error.status_code or 500,
+            detail={
+                "error": error.message,
+                "provider": error.provider,
+                "code": error.error_code,
+            },
+        )
+    except Exception as error:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(error))

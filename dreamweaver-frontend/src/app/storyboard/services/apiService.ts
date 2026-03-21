@@ -1,10 +1,24 @@
-import { GraphResponse, MediaType, AudioConfig, ImageConfig, VideoConfig } from "../types";
+import { GraphResponse, MediaType, StoryboardMediaConfig } from "../types";
 import dagre from 'dagre';
 
 // Layout Algorithm using Dagre (Client-side)
 // We keep this here because the layouting is a display concern, though it could move to server.
 // Keeping it here matches the original architecture's "post-processing" step.
-const layoutGraph = (nodes: any[], edges: any[]): GraphResponse => {
+type RawGraphNode = {
+  id: string;
+  data: {
+    label: string;
+    segment: string;
+  };
+};
+
+type RawGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+};
+
+const layoutGraph = (nodes: RawGraphNode[], edges: RawGraphEdge[]): GraphResponse => {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: 'LR', align: 'DL', nodesep: 100, ranksep: 200 });
   g.setDefaultEdgeLabel(() => ({}));
@@ -67,7 +81,11 @@ export const editNodeText = async (currentText: string, instruction: string): Pr
   return await response.json();
 };
 
-export const generateMedia = async (type: MediaType, prompt: string, config: any): Promise<string> => {
+export const generateMedia = async (
+  type: MediaType,
+  prompt: string,
+  config: StoryboardMediaConfig,
+): Promise<string> => {
     const response = await fetch('/api/media/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
