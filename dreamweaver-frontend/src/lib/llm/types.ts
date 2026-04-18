@@ -17,6 +17,8 @@ export interface ContentGenerationConfig {
 export interface ImageGenerationConfig {
   aspectRatio?: string;
   style?: string;
+  modelId?: string;
+  inputImage?: string;
 }
 
 export interface AudioGenerationConfig {
@@ -28,6 +30,7 @@ export interface VideoGenerationConfig {
   aspectRatio?: string;
   duration?: number;
   style?: string;
+  modelId?: string;
 }
 
 export interface LLMProvider {

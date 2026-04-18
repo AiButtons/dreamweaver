@@ -27,8 +27,8 @@ export class ModalImageProvider {
     const [width, height] = aspectRatios[aspectRatio] || aspectRatios["16:9"];
 
     // Check for Input Image (Conditional Routing)
-    // @ts-ignore - inputImage is a custom property passed from PropertiesPanel
     const inputImage = config?.inputImage;
+    const modelOverride: string | undefined = config?.modelId;
 
     let endpoint = `${this.baseUrl}/api/image/generate`;
     let payload: any = {
@@ -38,16 +38,16 @@ export class ModalImageProvider {
       // Default params
       n_steps: 35,
       guidance_scale: 8.0,
-      model_id: "zennah-image-gen" // Default Qwen Image model
+      model_id: modelOverride || "zennah-image-gen",
     };
 
     if (inputImage) {
-      // Switch to Edit Mode (Qwen Edit)
+      // Switch to Edit Mode (Qwen Edit or compatible).
       endpoint = `${this.baseUrl}/api/image/edit`;
       payload = {
         prompt: finalPrompt,
         image: inputImage,
-        model_id: "zennah-qwen-edit",
+        model_id: modelOverride || "zennah-qwen-edit",
         n: 1,
         extra_params: {
              n_steps: 45, // Edit usually needs more steps

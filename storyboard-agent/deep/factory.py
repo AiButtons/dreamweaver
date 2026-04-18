@@ -4,11 +4,21 @@ Factory for V2 deep-agent graph creation.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from typing import Any, Dict, Optional, Set, List
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
+
+
+_logger = logging.getLogger(__name__)
+
+# Checkpointer is a process-wide singleton so the connection pool is reused
+# across graph invocations instead of being rebuilt per thread.
+_checkpointer_lock = threading.Lock()
+_checkpointer_singleton: Optional[Any] = None
 
 from deepagents import create_deep_agent
 
@@ -32,23 +42,106 @@ from .tools import (
 )
 
 
+def _build_checkpointer() -> Any:
+    """
+    Resolves the checkpointer used by the storyboard deep-agent.
+
+    When ``STORYBOARD_CHECKPOINT_POSTGRES_URI`` is set, a ``PostgresSaver`` is
+    created over a ``psycopg_pool.ConnectionPool`` and tables are set up on
+    first use. In-flight approval workflows survive process restarts.
+
+    When the env var is unset, the driver is missing, or connection setup
+    fails, we fall back to ``MemorySaver`` and emit a warning — in-flight
+    approvals are ephemeral in that case.
+
+    Env:
+      STORYBOARD_CHECKPOINT_POSTGRES_URI     (required to enable persistence)
+      STORYBOARD_CHECKPOINT_POSTGRES_MAX_CONN (optional, default 10)
+    """
+    uri = os.getenv("STORYBOARD_CHECKPOINT_POSTGRES_URI", "").strip()
+    if not uri:
+        _logger.info(
+            "STORYBOARD_CHECKPOINT_POSTGRES_URI not set; using MemorySaver. "
+            "In-flight approval workflows will be lost on process restart."
+        )
+        return MemorySaver()
+
+    try:
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg_pool import ConnectionPool
+    except ImportError as exc:
+        _logger.warning(
+            "PostgresSaver/psycopg_pool not importable (%s); falling back to "
+            "MemorySaver. In-flight approvals will not persist.",
+            exc,
+        )
+        return MemorySaver()
+
+    try:
+        max_conn_env = os.getenv("STORYBOARD_CHECKPOINT_POSTGRES_MAX_CONN", "10")
+        try:
+            max_conn = max(1, int(max_conn_env))
+        except ValueError:
+            max_conn = 10
+
+        pool = ConnectionPool(
+            conninfo=uri,
+            max_size=max_conn,
+            # 10s cap on waiting for an available connection — prevents a
+            # misconfigured URI from hanging graph startup for the psycopg
+            # default (30s).
+            timeout=10,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                # Short libpq-level connect timeout so DNS/auth failures don't
+                # chew through the pool timeout on every attempt.
+                "connect_timeout": 5,
+            },
+            open=True,
+        )
+        saver = PostgresSaver(pool)
+        saver.setup()
+        _logger.info(
+            "PostgresSaver checkpointer initialized (pool max_size=%d).", max_conn
+        )
+        return saver
+    except Exception as exc:  # psycopg connection/auth/DNS/etc.
+        _logger.exception(
+            "PostgresSaver initialization failed (%s); falling back to "
+            "MemorySaver. In-flight approvals will not persist.",
+            exc,
+        )
+        return MemorySaver()
+
+
+def _resolve_checkpointer() -> Any:
+    """Returns the process-wide checkpointer singleton."""
+    global _checkpointer_singleton
+    if _checkpointer_singleton is not None:
+        return _checkpointer_singleton
+    with _checkpointer_lock:
+        if _checkpointer_singleton is None:
+            _checkpointer_singleton = _build_checkpointer()
+    return _checkpointer_singleton
+
+
 def _build_backend() -> Optional[Any]:
     """
-    Builds long-term memory backend composition.
-    Falls back safely when backend classes are unavailable in runtime env.
-    """
-    try:
-        from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
-    except Exception:
-        return None
+    Previously composed a ``CompositeBackend`` of a ``StateBackend`` for identity
+    packs and a ``StoreBackend`` for workspace memories. The constructors were
+    written against an older ``deepagents`` API — the installed version
+    (``deepagents==0.4.1``) requires a ``ToolRuntime`` at instantiation and
+    ``CompositeBackend`` now takes ``(default, routes: dict)``, so the old call
+    shape raises ``TypeError`` and the graph can't even be built from the CLI.
 
-    return CompositeBackend(
-        [
-            # Workspace-shared, opt-in memory store for reusable identity packs.
-            StateBackend(path=("/identity",), prefix="identity"),
-            StoreBackend(path=("/memories",), prefix="workspace"),
-        ]
-    )
+    Returning ``None`` lets ``create_deep_agent`` fall back to its default
+    backend, which is the behavior the live langgraph-dev server is already
+    relying on (``agent.py`` imports cleanly because it doesn't exercise this
+    path). If identity/workspace routing is needed again, re-introduce a
+    factory ``(runtime) -> BackendProtocol`` and pass it as ``backend=``.
+    """
+    return None
 
 
 def _interrupt_config() -> Dict[str, Dict[str, Any]]:
@@ -75,7 +168,7 @@ def create_storyboard_deep_agent_graph(
 ):
     model_name = os.getenv("STORYBOARD_AGENT_MODEL", "openai:gpt-4.1-mini")
     backend = _build_backend()
-    checkpointer = MemorySaver()
+    checkpointer = _resolve_checkpointer()
     store = InMemoryStore()
     allowlist = tool_allowlist or []
     filtered_tools = filter_tools_by_allowlist(ALL_TOOLS, allowlist)

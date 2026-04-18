@@ -48,7 +48,8 @@ interface AspectRatio {
 }
 
 const MODELS = [
-    { id: "ltx-2", name: "LTX-2", description: "Lightricks LTX Video Model", icon: "🎬", selected: true },
+    { id: "ltx-2.3", name: "LTX-2.3", description: "Lightricks LTX-2.3 (22B) — I2V + keyframe + retake", icon: "🎥", selected: true },
+    { id: "ltx-2", name: "LTX-2", description: "Lightricks LTX-2 (legacy)", icon: "🎬" },
     { id: "veo-3.1", name: "Veo 3.1", description: "Google DeepMind Veo Model", icon: "G" },
 ];
 
@@ -63,7 +64,8 @@ export default function VideoPage() {
     const [mode, setMode] = useState<"image" | "video">("video");
     const [prompt, setPrompt] = useState("");
     const [negativePrompt, setNegativePrompt] = useState("");
-    const [modelId, setModelId] = useState("ltx-2");
+    const [modelId, setModelId] = useState("ltx-2.3");
+    const [enhancePrompt, setEnhancePrompt] = useState(false);
     const [modelTab, setModelTab] = useState<"models" | "loras">("models");
     const [cameraMovement, setCameraMovement] = useState("static");
     const [aspectRatio, setAspectRatio] = useState("16:9");
@@ -106,7 +108,9 @@ export default function VideoPage() {
                 camera_movement: cameraMovement,
                 audio_enabled: audioEnabled,
                 slow_motion: slowMotion,
-                batch_size: batchSize
+                batch_size: batchSize,
+                // LTX-2.3 only — backend ignores these on legacy LTX-2.
+                enhance_prompt: enhancePrompt,
             };
 
             const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/video/generate`, {
@@ -151,7 +155,7 @@ export default function VideoPage() {
         } finally {
             setIsGenerating(false);
         }
-    }, [prompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame, modelId, persistGeneration]);
+    }, [prompt, negativePrompt, cameraMovement, aspectRatio, duration, audioEnabled, slowMotion, batchSize, startFrame, endFrame, modelId, enhancePrompt, persistGeneration]);
 
     const handleFileUpload = (type: "start" | "end") => {
         const input = document.createElement("input");
@@ -460,6 +464,20 @@ export default function VideoPage() {
                                     </TooltipTrigger>
                                     <TooltipContent>Toggle slow motion effect</TooltipContent>
                                 </Tooltip>
+
+                                {/* Enhance Prompt (LTX-2.3 only) */}
+                                {modelId === "ltx-2.3" && (
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button variant="outline" onClick={() => setEnhancePrompt(!enhancePrompt)}
+                                                className={cn("h-10 px-3 gap-1.5 border-border/50", enhancePrompt ? "bg-primary/20 border-primary/50 text-primary" : "bg-transparent")}>
+                                                <span className="text-sm font-semibold">✨</span>
+                                                <span className="text-sm">Enhance</span>
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Auto-enhance prompt via the model (LTX-2.3)</TooltipContent>
+                                    </Tooltip>
+                                )}
 
                                 {/* Batch Size */}
                                 <Tooltip>

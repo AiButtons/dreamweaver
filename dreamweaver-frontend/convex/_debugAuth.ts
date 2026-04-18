@@ -1,3 +1,5 @@
+import { v } from "convex/values";
+
 import { action, mutation, query } from "./_generated/server";
 import { createAuth } from "./auth";
 
@@ -81,6 +83,61 @@ export const probeAuthSignUp = mutation({
     };
   },
 });
+
+/**
+ * Dev-only: resets a user's password by email without requiring the old password
+ * or an email-based reset token. Gated by BETTER_AUTH_ALLOW_DEV_PASSWORD_RESET
+ * on the Convex deployment so it's impossible to enable by accident in prod.
+ *
+ * Looks up the user by email, hashes the new password with better-auth's
+ * configured hasher, and writes it via internalAdapter.updatePassword (which
+ * targets the providerId="credential" account row).
+ */
+export const resetPasswordDev = mutation({
+  args: { email: v.string(), newPassword: v.string() },
+  handler: async (ctx, { email, newPassword }) => {
+    if (process.env.BETTER_AUTH_ALLOW_DEV_PASSWORD_RESET !== "true") {
+      throw new Error(
+        "Dev password reset is disabled. Set BETTER_AUTH_ALLOW_DEV_PASSWORD_RESET=true on the Convex deployment to enable.",
+      );
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new Error("Email is required.");
+    }
+    if (newPassword.length < 8) {
+      throw new Error("Password must be at least 8 characters.");
+    }
+
+    const auth = createAuth(ctx);
+    // `$context` is the resolved AuthContext; exposes password hasher + internalAdapter.
+    const authContext = await (auth as unknown as { $context: Promise<AuthRuntimeContext> }).$context;
+
+    const user = await authContext.internalAdapter.findUserByEmail(normalizedEmail);
+    if (!user) {
+      throw new Error(`No user found with email "${normalizedEmail}".`);
+    }
+    const userId = (user as { user?: { id?: string }; id?: string }).user?.id
+      ?? (user as { id?: string }).id;
+    if (!userId) {
+      throw new Error("User record has no id field — database schema mismatch.");
+    }
+
+    const hashed = await authContext.password.hash(newPassword);
+    await authContext.internalAdapter.updatePassword(userId, hashed);
+
+    return { ok: true, email: normalizedEmail };
+  },
+});
+
+type AuthRuntimeContext = {
+  password: { hash: (plain: string) => Promise<string> };
+  internalAdapter: {
+    findUserByEmail: (email: string) => Promise<unknown>;
+    updatePassword: (userId: string, hashedPassword: string) => Promise<void>;
+  };
+};
 
 export const probeAuthSignUpAction = action({
   args: {},

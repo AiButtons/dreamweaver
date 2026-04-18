@@ -122,13 +122,24 @@ def planner_propose_media_prompt(
     prompt: str,
     negative_prompt: str,
     context_summary: str,
+    model_id: str = "",
 ) -> Dict[str, Any]:
-    """Builds a deterministic media prompt proposal."""
+    """Builds a deterministic media prompt proposal.
+
+    Optional ``model_id`` lets the agent pin a specific backend model for this proposal:
+      - images: ``zennah-image-gen`` (default), ``zennah-qwen-edit``, ``zennah-qwen-multiview``,
+        ``gpt-image-1``, ``dall-e-3``.
+      - videos: ``ltx-2.3`` (default, recommended — supports I2V + keyframe + retake),
+        ``ltx-2`` (legacy), ``veo-3.1``.
+    Pass an empty string to defer model choice to the executor.
+    """
+    model_id_norm = (model_id or "").strip()
     payload = {
         "storyboardId": storyboard_id,
         "branchId": branch_id,
         "nodeId": node_id,
         "mediaType": media_type,
+        "modelId": model_id_norm or None,
         "prompt": " ".join(prompt.split())[:2400],
         "negativePrompt": " ".join(negative_prompt.split())[:1200],
         "contextSummary": " ".join(context_summary.split())[:2400],

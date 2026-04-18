@@ -85,11 +85,13 @@ export const generateMedia = async (
   type: MediaType,
   prompt: string,
   config: StoryboardMediaConfig,
+  signal?: AbortSignal,
 ): Promise<string> => {
     const response = await fetch('/api/media/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, prompt, config }),
+        signal,
     });
 
     if (!response.ok) {

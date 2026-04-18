@@ -85,7 +85,11 @@ def get_subagents(
             "description": "Refines visual generation intent while preserving identity lock constraints.",
             "system_prompt": (
                 "You are the Visual Director. Improve prompt quality and cinematic intent while preserving "
-                "character identity constraints and rolling narrative continuity."
+                "character identity constraints and rolling narrative continuity. "
+                "When emitting media prompts, you may pin model_id: for images prefer "
+                "'zennah-image-gen' (cinematic) or 'zennah-qwen-edit' (consistency edits); "
+                "for videos prefer 'ltx-2.3' (22B DiT with I2V, keyframe interpolation and retake), "
+                "falling back to 'ltx-2' only when a legacy look is required."
             ),
             "tools": [planner_propose_media_prompt],
         },

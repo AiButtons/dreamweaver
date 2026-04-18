@@ -3,10 +3,39 @@ const resolveConvexSiteUrl = () => {
   if (!fromEnv) {
     throw new Error("CONVEX_SITE_URL is not set.");
   }
-  if (fromEnv.endsWith(".convex.cloud")) {
-    throw new Error(`CONVEX_SITE_URL must end with .convex.site. Received: ${fromEnv}`);
+
+  let parsed: URL;
+  try {
+    parsed = new URL(fromEnv);
+  } catch {
+    throw new Error(
+      `CONVEX_SITE_URL is not a valid URL. Expected https://<deployment>.convex.site. Received: ${fromEnv}`,
+    );
   }
-  return fromEnv;
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      `CONVEX_SITE_URL must use https. Expected https://<deployment>.convex.site. Received: ${fromEnv}`,
+    );
+  }
+
+  if (!parsed.hostname.endsWith(".convex.site")) {
+    throw new Error(
+      `CONVEX_SITE_URL host must end with .convex.site (got "${parsed.hostname}"). `
+        + `Common mistakes: using the .convex.cloud API URL, or the dashboard.convex.dev URL. `
+        + `Received: ${fromEnv}`,
+    );
+  }
+
+  const hasPath = parsed.pathname !== "" && parsed.pathname !== "/";
+  if (hasPath || parsed.search || parsed.hash) {
+    throw new Error(
+      `CONVEX_SITE_URL must be a bare origin with no path/query/hash (auth routes are appended). Received: ${fromEnv}`,
+    );
+  }
+
+  // Strip any trailing slash so target URLs concatenate cleanly.
+  return `${parsed.protocol}//${parsed.host}`;
 };
 
 const forwardAuthRequest = async (request: Request) => {
@@ -40,14 +69,24 @@ const forwardAuthRequest = async (request: Request) => {
   }
 
   const method = request.method.toUpperCase();
+
+  // Buffer the request body before forwarding. Streaming `request.body` + `duplex: "half"`
+  // through Next.js 16 / undici was raising `TypeError: fetch failed` with cause
+  // `expected non-null body source` on POSTs (sign-in, sign-up). Buffering matches the
+  // pattern `bufferedBetterAuthHandler` uses in convex/http.ts. Let undici recompute
+  // Content-Length from the buffer to avoid a mismatch when upstream chunked encoding
+  // was negotiated by Next.
+  let forwardBody: ArrayBuffer | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    forwardBody = await request.arrayBuffer();
+    headers.delete("content-length");
+  }
+
   const upstream = await fetch(targetUrl, {
     method,
     headers,
-    body: method === "GET" || method === "HEAD" ? undefined : request.body,
+    body: forwardBody,
     redirect: "manual",
-    // Required when passing through a request stream in Node.js.
-    // @ts-expect-error `duplex` exists at runtime for undici fetch.
-    duplex: method === "GET" || method === "HEAD" ? undefined : "half",
   });
 
   // Normalize the response so browsers don't attempt to decode already-decoded bodies.

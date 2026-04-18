@@ -26,6 +26,20 @@ interface PropertiesPanelProps {
 const defaultNegativePrompt =
   "full body shot, wide shot, distant, rotation of subject, spinning person, morphing, distortion";
 
+const IMAGE_MODEL_OPTIONS: { id: string; name: string; description: string }[] = [
+  { id: "zennah-image-gen", name: "Zennah Image Gen", description: "Cinematic, camera-aware (Modal)" },
+  { id: "zennah-qwen-edit", name: "Zennah Multi-Angle", description: "Consistent multi-angle edits" },
+  { id: "zennah-qwen-multiview", name: "Zennah Multi-View", description: "Auto 3-angle (LoRA)" },
+  { id: "gpt-image-1", name: "GPT Image 1.5", description: "OpenAI flagship w/ editing" },
+  { id: "dall-e-3", name: "DALL·E 3", description: "OpenAI high-quality" },
+];
+
+const VIDEO_MODEL_OPTIONS: { id: string; name: string; description: string }[] = [
+  { id: "ltx-2.3", name: "LTX-2.3", description: "Lightricks 22B — I2V + keyframe + retake" },
+  { id: "ltx-2", name: "LTX-2", description: "Legacy Lightricks LTX-2" },
+  { id: "veo-3.1", name: "Veo 3.1", description: "Google DeepMind (coming soon)" },
+];
+
 function getNextNode(currentId: string, nodes: StoryNode[], edges: StoryEdge[]) {
   const edge = edges.find((e) => e.source === currentId);
   if (!edge) return null;
@@ -57,6 +71,12 @@ export default function PropertiesPanel({
   const [duration, setDuration] = useState("5");
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [slowMotion, setSlowMotion] = useState(false);
+  const [enhancePrompt, setEnhancePrompt] = useState(false);
+  const [cameraMovement, setCameraMovement] = useState("static");
+
+  // Per-node model overrides.
+  const [imageModelId, setImageModelId] = useState<string>("zennah-image-gen");
+  const [videoModelId, setVideoModelId] = useState<string>("ltx-2.3");
 
   const [rewriteInstruction, setRewriteInstruction] = useState("");
 
@@ -83,7 +103,7 @@ export default function PropertiesPanel({
       config = { voice };
     }
     if (mediaType === MediaType.IMAGE) {
-      config = { style, aspectRatio, inputImage: data.image };
+      config = { style, aspectRatio, inputImage: data.image, imageModelId };
     }
     if (mediaType === MediaType.VIDEO) {
       config = {
@@ -94,6 +114,9 @@ export default function PropertiesPanel({
         audioEnabled,
         slowMotion,
         duration: Number(duration),
+        videoModelId,
+        enhancePrompt: videoModelId === "ltx-2.3" ? enhancePrompt : undefined,
+        cameraMovement,
       };
     }
 
@@ -264,6 +287,26 @@ export default function PropertiesPanel({
               </div>
             </Collapsible>
 
+            {mediaType === MediaType.IMAGE ? (
+              <ModelPicker
+                label="Image Model"
+                options={IMAGE_MODEL_OPTIONS}
+                value={imageModelId}
+                onChange={setImageModelId}
+                disabled={isProcessing}
+              />
+            ) : null}
+
+            {mediaType === MediaType.VIDEO ? (
+              <ModelPicker
+                label="Video Model"
+                options={VIDEO_MODEL_OPTIONS}
+                value={videoModelId}
+                onChange={setVideoModelId}
+                disabled={isProcessing}
+              />
+            ) : null}
+
             <Button onClick={handleGenerate} disabled={isProcessing} className="w-full h-11 gap-2">
               <Sparkles className="size-4" />
               {mediaType === MediaType.IMAGE ? "Generate Image" : mediaType === MediaType.VIDEO ? "Generate Video" : "Generate Audio"}
@@ -344,6 +387,22 @@ export default function PropertiesPanel({
                 <Field label="Duration (seconds)">
                   <Input value={duration} onChange={(e) => setDuration(e.target.value)} disabled={isProcessing} />
                 </Field>
+                <Field label="Camera movement">
+                  <Input
+                    value={cameraMovement}
+                    onChange={(e) => setCameraMovement(e.target.value)}
+                    placeholder="static, pan-left, dolly-in, orbit..."
+                    disabled={isProcessing}
+                  />
+                </Field>
+                {videoModelId === "ltx-2.3" ? (
+                  <Toggle
+                    label="Enhance prompt (LTX-2.3)"
+                    value={enhancePrompt}
+                    onChange={setEnhancePrompt}
+                    disabled={isProcessing}
+                  />
+                ) : null}
                 <div className="text-[11px] text-muted-foreground">
                   Start frame uses this node&apos;s image. End frame uses the next node image when available.
                 </div>
@@ -362,6 +421,61 @@ export default function PropertiesPanel({
             ) : null}
           </TabsContent>
         </Tabs>
+      </div>
+    </div>
+  );
+}
+
+function ModelPicker({
+  label,
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  options: { id: string; name: string; description: string }[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled: boolean;
+}) {
+  const selected = options.find((o) => o.id === value) ?? options[0];
+  return (
+    <div className="rounded-xl border border-border/60 bg-card/40 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+          {label}
+        </div>
+        <Badge variant="outline" className="text-[10px] font-medium">
+          {selected?.name}
+        </Badge>
+      </div>
+      <div className="grid grid-cols-1 gap-1.5">
+        {options.map((opt) => {
+          const active = opt.id === value;
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(opt.id)}
+              className={cn(
+                "text-left rounded-lg border px-3 py-2 transition-colors",
+                "border-border/60 bg-background/60 hover:bg-background/80",
+                active && "border-primary/50 bg-primary/15 ring-1 ring-primary/30",
+                disabled && "opacity-60 cursor-not-allowed",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold truncate">{opt.name}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">{opt.id}</div>
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                {opt.description}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

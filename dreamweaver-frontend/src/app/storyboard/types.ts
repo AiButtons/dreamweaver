@@ -501,4 +501,14 @@ export interface StoryboardMediaConfig {
   audioEnabled?: boolean;
   slowMotion?: boolean;
   duration?: number;
+  // Per-node model overrides. Frontend providers will fall back to defaults
+  // (e.g. zennah-image-gen / ltx-2.3) when these are unset.
+  imageModelId?: string;
+  videoModelId?: string;
+  // LTX-2.3 specific video overrides.
+  enhancePrompt?: boolean;
+  cameraMovement?: string;
+  numInferenceSteps?: number;
+  cfgGuidanceScale?: number;
+  seed?: number;
 }

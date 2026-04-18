@@ -117,6 +117,46 @@ IMAGE_MODELS: List[ModelConfig] = [
 
 VIDEO_MODELS: List[ModelConfig] = [
     ModelConfig(
+        id="ltx-2.3",
+        name="LTX-2.3",
+        provider=ModelProvider.MODAL,
+        capabilities=[
+            ModelCapability.VIDEO_GEN,
+            ModelCapability.HD,
+            ModelCapability.CAMERA_CONTROL,
+        ],
+        description="Lightricks LTX-2.3 (22B DiT) — I2V + keyframe interpolation + retake",
+        max_resolution="1536x1024",
+        max_duration="10.7s",
+    ),
+    ModelConfig(
+        id="ltx-2",
+        name="LTX-2",
+        provider=ModelProvider.MODAL,
+        capabilities=[
+            ModelCapability.VIDEO_GEN,
+            ModelCapability.CAMERA_CONTROL,
+        ],
+        description="Legacy LTX-2 video model (predecessor to LTX-2.3)",
+        max_resolution="1280x704",
+        max_duration="10s",
+    ),
+    ModelConfig(
+        id="veo-3.1",
+        name="Veo 3.1",
+        provider=ModelProvider.OPENAI,  # Google provider key re-uses this enum slot for now
+        capabilities=[
+            ModelCapability.VIDEO_GEN,
+            ModelCapability.AUDIO,
+            ModelCapability.HD,
+            ModelCapability.CAMERA_CONTROL,
+        ],
+        description="Google DeepMind Veo 3.1 video model",
+        max_resolution="1080p",
+        max_duration="12s",
+        enabled=False,  # placeholder until Vertex credentials are wired
+    ),
+    ModelConfig(
         id="sora-2",
         name="Sora 2",
         provider=ModelProvider.OPENAI,

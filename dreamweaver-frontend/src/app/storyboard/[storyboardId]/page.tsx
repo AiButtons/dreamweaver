@@ -237,6 +237,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const graphCanvasRef = useRef<HTMLDivElement | null>(null);
   const bootstrappedTeamsRef = useRef(false);
   const touchedStoryboardRef = useRef<string | null>(null);
+  const sweptMediaRef = useRef<string | null>(null);
   const sessionState = authClient.useSession();
   const sessionData = (sessionState.data as AuthSessionEnvelope | undefined) ?? null;
   const isAuthLoading = sessionState.isPending;
@@ -328,7 +329,10 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const upsertEdge = useMutation(mutationRef("storyboards:upsertEdge"));
   const recordEvent = useMutation(mutationRef("storyboards:recordStoryEvent"));
   const refreshHistory = useMutation(mutationRef("storyboards:refreshNodeHistoryContexts"));
-  const createMediaAsset = useMutation(mutationRef("mediaAssets:createMediaAsset"));
+  const startMediaGeneration = useMutation(mutationRef("mediaAssets:startMediaGeneration"));
+  const completeMediaGeneration = useMutation(mutationRef("mediaAssets:completeMediaGeneration"));
+  const failMediaGeneration = useMutation(mutationRef("mediaAssets:failMediaGeneration"));
+  const sweepStaleMediaGenerations = useMutation(mutationRef("mediaAssets:sweepStaleMediaGenerations"));
   const bootstrapPrebuiltTeams = useMutation(mutationRef("agentTeams:bootstrapPrebuiltTeams"));
   const assignTeamToStoryboard = useMutation(mutationRef("agentTeams:assignTeamToStoryboard"));
   const createAgentTeam = useMutation(mutationRef("agentTeams:createTeam"));
@@ -378,6 +382,23 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       touchedStoryboardRef.current = null;
     });
   }, [activeStoryboardId, isAuthenticated, touchStoryboardOpened]);
+
+  // Clean up pending media generations that outlived their window — typically
+  // left behind when a previous session was killed mid-render (Next.js route
+  // timeout, browser reload, process crash). Runs once per storyboard open.
+  useEffect(() => {
+    if (!isAuthenticated || !activeStoryboardId) {
+      return;
+    }
+    if (sweptMediaRef.current === activeStoryboardId) {
+      return;
+    }
+    sweptMediaRef.current = activeStoryboardId;
+    void sweepStaleMediaGenerations({ storyboardId: activeStoryboardId }).catch((error) => {
+      console.warn("Failed to sweep stale media generations", error);
+      sweptMediaRef.current = null;
+    });
+  }, [activeStoryboardId, isAuthenticated, sweepStaleMediaGenerations]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -717,13 +738,47 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       if (!node) {
         return;
       }
+      const isPersisted = Boolean(activeStoryboardId) && (type === MediaType.IMAGE || type === MediaType.VIDEO);
+      const kind = type === MediaType.IMAGE ? "image" : "video";
+      const resolvedModelId = type === MediaType.IMAGE
+        ? (config.imageModelId ?? "storyboard-default")
+        : type === MediaType.VIDEO
+          ? (config.videoModelId ?? "storyboard-default")
+          : "storyboard-default";
+
+      // Create the pending Convex row FIRST so a reload / crash / timeout mid-
+      // generation still leaves a visible record. The row is the job handle we
+      // pass to complete/fail below.
+      let mediaAssetId: Awaited<ReturnType<typeof startMediaGeneration>> | null = null;
+      if (isPersisted && activeStoryboardId) {
+        try {
+          mediaAssetId = await startMediaGeneration({
+            storyboardId: activeStoryboardId,
+            nodeId,
+            kind,
+            modelId: resolvedModelId,
+            prompt,
+            negativePrompt: config.negativePrompt,
+          });
+        } catch (error) {
+          // If we can't even create the pending row, bail rather than fire a
+          // generation we won't be able to track.
+          const message = error instanceof Error ? error.message : "Failed to start media generation";
+          console.error(message);
+          alert(`Media generation failed: ${message}`);
+          return;
+        }
+      }
+
       setIsProcessing(true);
       updateNodeData(nodeId, { isProcessing: true, processingTask: type.toLowerCase() });
+      if (type === MediaType.IMAGE && config.inputImage) {
+        updateNodeData(nodeId, { inputImage: config.inputImage });
+      }
+
+      const controller = new AbortController();
       try {
-        if (type === MediaType.IMAGE && config.inputImage) {
-          updateNodeData(nodeId, { inputImage: config.inputImage });
-        }
-        const resultUrl = await generateMedia(type, prompt, config);
+        const resultUrl = await generateMedia(type, prompt, config, controller.signal);
 
         if (type === MediaType.IMAGE) {
           const oldHistory = node.data.imageHistory ?? [];
@@ -740,7 +795,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
                   id: generateId(),
                   kind: "image",
                   url: resultUrl,
-                  modelId: "unknown",
+                  modelId: resolvedModelId,
                   prompt,
                   negativePrompt: config.negativePrompt,
                   status: "completed",
@@ -764,7 +819,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
                   id: generateId(),
                   kind: "video",
                   url: resultUrl,
-                  modelId: "unknown",
+                  modelId: resolvedModelId,
                   prompt,
                   negativePrompt: config.negativePrompt,
                   status: "completed",
@@ -805,16 +860,11 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
           }
         }
 
-        if (activeStoryboardId && (type === MediaType.IMAGE || type === MediaType.VIDEO)) {
-          await createMediaAsset({
-            storyboardId: activeStoryboardId,
-            nodeId,
-            kind: type === MediaType.IMAGE ? "image" : "video",
+        if (mediaAssetId && activeStoryboardId) {
+          await completeMediaGeneration({
+            mediaAssetId,
             sourceUrl: resultUrl,
-            modelId: "storyboard-default",
-            prompt,
-            negativePrompt: config.negativePrompt,
-            status: "completed",
+            modelId: resolvedModelId,
             identityScore,
             consistencyScore,
             wardrobeCompliance,
@@ -834,6 +884,16 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Media generation failed";
         console.error(message);
+        // Flip the pending row to failed so the UI can surface it instead of
+        // silently losing the generation. Best-effort: if the mutation itself
+        // fails, we fall back to leaving the row pending for the sweeper.
+        if (mediaAssetId) {
+          try {
+            await failMediaGeneration({ mediaAssetId, errorMessage: message });
+          } catch (markFailError) {
+            console.error("Failed to mark media generation as failed", markFailError);
+          }
+        }
         alert(`Media generation failed: ${message}`);
       } finally {
         updateNodeData(nodeId, { isProcessing: false, processingTask: undefined });
@@ -842,11 +902,13 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     },
     [
       activeStoryboardId,
-      createMediaAsset,
+      completeMediaGeneration,
       edges,
+      failMediaGeneration,
       nodes,
       recordEvent,
       refreshHistory,
+      startMediaGeneration,
       updateNodeData,
     ],
   );
