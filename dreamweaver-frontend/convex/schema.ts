@@ -88,6 +88,21 @@ export default defineSchema({
     videoCount: v.optional(v.number()),
     mode: v.union(v.literal("graph_studio"), v.literal("agent_draft")),
     visualTheme: v.string(),
+    // Editor UI state persisted across reloads. Currently just the ReactFlow
+    // viewport (pan/zoom); kept as a typed object rather than a JSON string
+    // so readers don't need a parse step and the schema documents what's in
+    // there. Optional so pre-existing storyboards don't need a backfill.
+    editorState: v.optional(
+      v.object({
+        viewport: v.optional(
+          v.object({
+            x: v.number(),
+            y: v.number(),
+            zoom: v.number(),
+          }),
+        ),
+      }),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -313,7 +328,16 @@ export default defineSchema({
     modelId: v.string(),
     prompt: v.string(),
     negativePrompt: v.optional(v.string()),
-    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("failed")),
+    // "rolled_back" is the terminal state for assets that were successfully
+    // generated as part of a batch plan, but the batch partially failed and
+    // the adapter compensated earlier successes. The row is preserved for
+    // audit/debug but is removed from the node's active media arrays.
+    status: v.union(
+      v.literal("pending"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("rolled_back"),
+    ),
     identityScore: v.optional(v.number()),
     wardrobeCompliance: v.optional(
       v.union(v.literal("matching"), v.literal("deviation"), v.literal("unknown")),
@@ -345,6 +369,12 @@ export default defineSchema({
     rationale: v.string(),
     diffSummary: v.optional(v.string()),
     payloadJson: v.string(),
+    // Provenance of the task: "agent" if the row was created by a LangGraph
+    // agent run (via upsertAgentDailies / upsertAgentSimulationRun), "human"
+    // for direct UI-driven creates. Optional for backward compatibility with
+    // rows written before this field existed; unset rows should be treated
+    // as "human" by readers.
+    origin: v.optional(v.union(v.literal("agent"), v.literal("human"))),
     executionResultJson: v.optional(v.string()),
     executionStartedAt: v.optional(v.number()),
     executionFinishedAt: v.optional(v.number()),
@@ -530,6 +560,10 @@ export default defineSchema({
       v.literal("rejected"),
       v.literal("applied"),
     ),
+    // Join to the `approvalTasks` row that carries the full executionPlan
+    // + decision audit trail. Optional because legacy rows created before
+    // this field was introduced won't have one.
+    approvalTaskId: v.optional(v.id("approvalTasks")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -555,6 +589,9 @@ export default defineSchema({
     repairOperationsJson: v.string(),
     confidence: v.number(),
     impactScore: v.number(),
+    // Join to the `approvalTasks` row that carries the full executionPlan
+    // + decision audit trail. Optional for legacy rows.
+    approvalTaskId: v.optional(v.id("approvalTasks")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

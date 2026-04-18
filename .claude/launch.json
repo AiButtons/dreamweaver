@@ -1,0 +1,60 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "main:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8001"
+      ],
+      "port": 8001,
+      "cwd": "dreamweaver-backend"
+    },
+    {
+      "name": "langgraph",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "langgraph",
+        "dev",
+        "--no-browser",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8123"
+      ],
+      "port": 8123,
+      "cwd": "storyboard-agent"
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "bunx",
+      "runtimeArgs": [
+        "next",
+        "dev",
+        "--port",
+        "3002"
+      ],
+      "port": 3002,
+      "cwd": "dreamweaver-frontend"
+    },
+    {
+      "name": "convex",
+      "runtimeExecutable": "bunx",
+      "runtimeArgs": [
+        "convex",
+        "dev"
+      ],
+      "port": 0,
+      "autoPort": true,
+      "cwd": "dreamweaver-frontend"
+    }
+  ]
+}

@@ -389,6 +389,7 @@ export interface AutonomousDailiesRecord {
   continuityRisksJson: string;
   proposedOperationsJson: string;
   status: "drafted" | "approved" | "rejected" | "applied";
+  approvalTaskId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -405,6 +406,7 @@ export interface SimulationCriticRunRecord {
   repairOperationsJson: string;
   confidence: number;
   impactScore: number;
+  approvalTaskId?: string;
   createdAt: number;
   updatedAt: number;
 }

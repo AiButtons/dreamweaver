@@ -20,6 +20,7 @@ except ModuleNotFoundError:
     StateGraph = None  # type: ignore[assignment]
 
 from deep import create_storyboard_deep_agent_graph
+from deep.tools import is_tool_allowed as _tools_is_tool_allowed
 
 try:
     from linear_agent import graph as linear_graph
@@ -37,6 +38,10 @@ class RouterState(TypedDict, total=False):
     effective_resource_scope: List[str]
     policy_trace: List[Dict[str, Any]]
     shadow_compare: Dict[str, Any]
+    # Authenticated user driving this agent session. Populated by the frontend
+    # bridge so policy traces can attribute agent decisions back to the human
+    # driver alongside the team identity (team revision != who triggered it).
+    user_identity: Dict[str, Any]
 
 
 _ACTION_POLICY_TOKENS: Dict[str, str] = {
@@ -108,15 +113,13 @@ def _compare_results(v2_result: Dict[str, Any], v1_result: Dict[str, Any]) -> Di
 
 
 def _is_tool_allowed(allowlist: List[str], token: str) -> bool:
-    if len(allowlist) == 0:
-        return True
-    if "*" in allowlist:
-        return True
-    if token in allowlist:
-        return True
-    if token.startswith("media.") and "media.prompt" in allowlist:
-        return True
-    return False
+    """Proxy for ``deep.tools.is_tool_allowed`` so router policy enforcement
+    stays in lockstep with the tool-filter semantics used at graph init.
+
+    Behavior is defined by ``deep.tools.is_tool_allowed``: an empty allowlist
+    applies ``DEFAULT_RUNTIME_ALLOWLIST`` (``team.manage`` deny-by-default).
+    """
+    return _tools_is_tool_allowed(allowlist, token)
 
 
 def _extract_action(payload: Dict[str, Any]) -> str:
@@ -267,6 +270,20 @@ def _run_selected_graph(state: RouterState) -> RouterState:
             mode = "v1_linear"
 
     policy_trace: List[Dict[str, Any]] = []
+    user_identity = state.get("user_identity", {})
+    if isinstance(user_identity, dict) and user_identity.get("userId"):
+        # Record only non-sensitive identifiers in the trace. Email/name are
+        # passed for the graph's own logging (e.g. surface in HITL prompts),
+        # but we stop short of embedding them in the policy trace that ships
+        # back through LangSmith.
+        policy_trace.append(
+            {
+                "stage": "router",
+                "rule": "user_identity_observed",
+                "userId": str(user_identity.get("userId", "")),
+                "hasEmail": bool(user_identity.get("email")),
+            }
+        )
     runtime_policy = state.get("runtime_policy", {})
     if isinstance(runtime_policy, dict):
         policy_trace.append(

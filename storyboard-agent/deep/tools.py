@@ -815,6 +815,50 @@ ALL_TOOLS = [
     generate_team_from_prompt,
 ]
 
+# Supervisor-only core: the minimum tools the top-level orchestrator needs to
+# call directly. Every other tool is specialized work that belongs inside a
+# subagent and must be reached via `task` delegation. Narrowing the supervisor
+# here is the "allowlist at init" defense — even if the runtime allowlist is
+# misconfigured, the supervisor cannot directly invoke mutation-adjacent tools
+# (graph_patch / media_prompt / team_* / etc.) because they are never added to
+# its tool set in the first place.
+#
+# `select_agent_team` stays on the supervisor because team switching is an
+# orchestration-level authority, not specialized work. All other team.manage
+# tools (create/update/publish/generate_from_prompt) are gated behind the
+# `team_architect` subagent.
+SUPERVISOR_CORE_TOOLS = [
+    producer_guard,
+    continuity_critic,
+    approve_graph_patch,
+    approve_media_prompt,
+    approve_execution_plan,
+    approve_batch_ops,
+    preview_simulation_critic_plan,
+    approve_dailies_batch,
+    approve_merge_policy,
+    approve_repair_plan,
+    select_agent_team,
+]
+
+# Safe default scope applied when the runtime `effective_tool_scope` is unset
+# or empty. Previously an empty allowlist was interpreted as "allow
+# everything", which collapsed the policy posture. The default explicitly
+# excludes `team.manage` so team mutations always require an explicit opt-in
+# (caller passes a list containing "team.manage" or "*"). Every other
+# capability is enabled by default so existing storyboards keep working.
+DEFAULT_RUNTIME_ALLOWLIST: List[str] = [
+    "graph.patch",
+    "media.prompt",
+    "execution.plan",
+    "simulation.critic",
+    "continuity.check",
+    "dailies.batch",
+    "execution.guard",
+    "repair.plan",
+    "branch.merge",
+]
+
 TOOL_POLICY_TOKENS: Dict[str, str] = {
     planner_propose_graph_patch.name: "graph.patch",
     planner_propose_media_prompt.name: "media.prompt",
@@ -841,13 +885,22 @@ TOOL_POLICY_TOKENS: Dict[str, str] = {
 
 
 def is_tool_allowed(allowlist: List[str], token: str) -> bool:
-    if len(allowlist) == 0:
+    """Checks whether ``token`` is permitted by the runtime allowlist.
+
+    Semantics:
+      * Empty allowlist → apply ``DEFAULT_RUNTIME_ALLOWLIST`` (deny-by-default
+        for tokens not in the default, notably ``team.manage``).
+      * ``["*"]`` → allow everything (explicit open-scope, e.g. local dev).
+      * Otherwise → token must appear in the allowlist verbatim. The legacy
+        prefix expansion for ``media.`` still applies so a caller passing only
+        ``media.prompt`` also grants sibling ``media.*`` tokens.
+    """
+    effective = allowlist if len(allowlist) > 0 else DEFAULT_RUNTIME_ALLOWLIST
+    if "*" in effective:
         return True
-    if "*" in allowlist:
+    if token in effective:
         return True
-    if token in allowlist:
-        return True
-    if token.startswith("media.") and "media.prompt" in allowlist:
+    if token.startswith("media.") and "media.prompt" in effective:
         return True
     return False
 
@@ -858,6 +911,8 @@ def filter_tools_by_allowlist(tools: List[Any], allowlist: List[str]) -> List[An
         tool_name = str(getattr(tool, "name", ""))
         token = TOOL_POLICY_TOKENS.get(tool_name)
         if token is None:
+            # Tools without a policy token can't be governed — drop them so
+            # nothing un-audited slips into an init-time allowlist.
             continue
         if is_tool_allowed(allowlist, token):
             allowed.append(tool)

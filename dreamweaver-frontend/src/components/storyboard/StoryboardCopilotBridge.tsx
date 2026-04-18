@@ -56,6 +56,12 @@ type RollingContextMap = Record<
   }
 >;
 
+export type UserIdentity = {
+  userId: string;
+  email: string | null;
+  name: string | null;
+};
+
 type StoryboardAgentState = {
   storyboardId: string;
   mode: "graph_studio" | "agent_draft";
@@ -89,6 +95,13 @@ type StoryboardAgentState = {
   runtime_policy: RuntimeResolvedTeam["runtimePolicy"] | null;
   effective_tool_scope: string[];
   effective_resource_scope: string[];
+  // Signed-in user driving this agent session. `null` until the session resolves;
+  // the route handler still requires a valid session token so an `null` here just
+  // means the client hasn't hydrated yet, not that the agent is unauthenticated.
+  userIdentity: UserIdentity | null;
+  // Snake-cased alias so the Python router (`RouterState`) can log the identity in
+  // its `policy_trace` for audit correlation without re-mapping in the graph.
+  user_identity: UserIdentity | null;
 };
 
 type DryRunRiskLevel = "low" | "medium" | "high" | "critical";
@@ -528,6 +541,7 @@ export function StoryboardCopilotBridge({
   approvals,
   mode,
   runtimeResolvedTeam,
+  userIdentity,
 }: {
   storyboardId: string | null;
   nodes: StoryNode[];
@@ -535,6 +549,7 @@ export function StoryboardCopilotBridge({
   approvals: ApprovalSummary[];
   mode: "graph_studio" | "agent_draft";
   runtimeResolvedTeam: RuntimeResolvedTeam | null;
+  userIdentity: UserIdentity | null;
 }) {
   const safeStoryboardId = storyboardId ?? "";
   const approvalsStable = approvals.length === 0 ? EMPTY_APPROVALS : approvals;
@@ -581,6 +596,8 @@ export function StoryboardCopilotBridge({
       runtime_policy: runtimeResolvedTeam?.runtimePolicy ?? null,
       effective_tool_scope: runtimeResolvedTeam?.toolAllowlist ?? [],
       effective_resource_scope: runtimeResolvedTeam?.resourceScopes ?? [],
+      userIdentity,
+      user_identity: userIdentity,
     }),
     [
       activeTeamSnapshot,
@@ -590,6 +607,7 @@ export function StoryboardCopilotBridge({
       rollingContextMap,
       runtimeResolvedTeam,
       safeStoryboardId,
+      userIdentity,
     ],
   );
 
@@ -614,6 +632,7 @@ export function StoryboardCopilotBridge({
       approvals: agentState.pendingApprovals,
       team: agentState.activeTeam,
       teamRevision: agentState.activeTeamRevision,
+      userId: agentState.userIdentity?.userId ?? null,
     });
     if (key === lastPushedKeyRef.current) {
       return;
@@ -644,12 +663,23 @@ export function StoryboardCopilotBridge({
 
   const createApprovalTask = useMutation(mutationRef("approvals:createTask"));
   const resolveApprovalTask = useMutation(mutationRef("approvals:resolveTask"));
+  const markApprovalExecutionStarted = useMutation(
+    mutationRef("approvals:markExecutionStarted"),
+  );
+  const markApprovalExecutionFinished = useMutation(
+    mutationRef("approvals:markExecutionFinished"),
+  );
+  const upsertAgentDailies = useMutation(mutationRef("dailies:upsertAgentDailies"));
+  const upsertAgentSimulationRun = useMutation(
+    mutationRef("dailies:upsertAgentSimulationRun"),
+  );
   const applyGraphPatch = useMutation(mutationRef("storyboards:applyGraphPatch"));
   const recordStoryEvent = useMutation(mutationRef("storyboards:recordStoryEvent"));
   const refreshNodeHistoryContexts = useMutation(
     mutationRef("storyboards:refreshNodeHistoryContexts"),
   );
   const createMediaAsset = useMutation(mutationRef("mediaAssets:createMediaAsset"));
+  const revertBatchMediaAssets = useMutation(mutationRef("mediaAssets:revertBatchMediaAssets"));
   const compileNodePromptPack = useMutation(mutationRef("storyboards:compileNodePromptPack"));
   const simulateExecutionPlan = useMutation(mutationRef("narrativeGit:simulateExecutionPlan"));
   const commitPlanOps = useMutation(mutationRef("narrativeGit:commitPlanOps"));
@@ -680,10 +710,13 @@ export function StoryboardCopilotBridge({
       edges,
       createApprovalTask,
       resolveApprovalTask,
+      markApprovalExecutionStarted,
+      markApprovalExecutionFinished,
       applyGraphPatch,
       recordStoryEvent,
       refreshNodeHistoryContexts,
       createMediaAsset,
+      revertBatchMediaAssets,
       compileNodePromptPack,
       simulateExecutionPlan,
       commitPlanOps,
@@ -701,7 +734,10 @@ export function StoryboardCopilotBridge({
     [
       applyGraphPatch,
       createApprovalTask,
+      markApprovalExecutionStarted,
+      markApprovalExecutionFinished,
       createMediaAsset,
+      revertBatchMediaAssets,
       compileNodePromptPack,
       simulateExecutionPlan,
       commitPlanOps,
@@ -974,13 +1010,9 @@ export function StoryboardCopilotBridge({
       }
 
       return (
-        <SimulationCriticPreviewCard
-          simulationRunId={input.simulationRunId}
-          summary={input.summary}
-          riskLevel={input.riskLevel}
-          issues={input.issues}
-          confidence={input.confidence}
-          impactScore={input.impactScore}
+        <AgentSimulationCriticPreviewCard
+          input={input}
+          upsertAgentSimulationRun={upsertAgentSimulationRun}
           onContinue={async () => {
             const nextPayload = {
               ...input.executionPlan,
@@ -1145,11 +1177,10 @@ export function StoryboardCopilotBridge({
       };
 
       return (
-        <BatchApprovalCard
-          title={`Autonomous Dailies - ${input.operations.length} op(s)`}
-          subtitle={`Reel ${input.sourceId}`}
-          body={input.dryRun?.summary ?? "Autonomous dailies candidate plan"}
-          operations={input.operations}
+        <AgentDailiesApprovalCard
+          input={input}
+          executionInput={executionInput}
+          upsertAgentDailies={upsertAgentDailies}
           onApprove={async (selectedOperations) => {
             const execution = await executeApprovedExecutionPlan(
               adapterDependencies,
@@ -2080,6 +2111,154 @@ function SimulationCriticPreviewCard({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Wrapper around BatchApprovalCard that also upserts the agent-emitted reel
+ * into Convex the moment the HITL card mounts. This is what closes the
+ * "agent-emitted approve_dailies_batch should also populate the Dailies
+ * panel" gap — without this, the panel only shows reels produced by the
+ * explicit `generateAutonomousDailies` mutation.
+ *
+ * The upsert is idempotent on `(storyboardId, reelId)` so re-renders are
+ * safe, and failures are logged but non-fatal — the producer can still
+ * approve/reject the card even if the panel row isn't persisted.
+ */
+function AgentDailiesApprovalCard({
+  input,
+  executionInput,
+  upsertAgentDailies,
+  onApprove,
+  onReject,
+}: {
+  input: {
+    planId: string;
+    storyboardId?: string;
+    branchId?: string;
+    title?: string;
+    rationale?: string;
+    sourceId?: string;
+    operations: unknown[];
+    dryRun?: ExecutionPlanInput["dryRun"];
+  };
+  executionInput: ExecutionPlanInput;
+  upsertAgentDailies: (args: Record<string, unknown>) => Promise<unknown>;
+  onApprove: (selectedOperations: unknown[]) => Promise<void>;
+  onReject: () => Promise<void>;
+}) {
+  useEffect(() => {
+    if (!input.storyboardId || !input.sourceId) {
+      return;
+    }
+    const issues = input.dryRun?.issues;
+    const continuityRisksJson = JSON.stringify(Array.isArray(issues) ? issues : []);
+    void upsertAgentDailies({
+      storyboardId: input.storyboardId,
+      branchId: input.branchId ?? "main",
+      reelId: input.sourceId,
+      title: input.title ?? `Autonomous Dailies ${input.planId}`,
+      summary: input.rationale ?? input.dryRun?.summary ?? "Autonomous dailies batch proposal",
+      continuityRiskLevel: input.dryRun?.riskLevel ?? "medium",
+      continuityRisksJson,
+      proposedOperationsJson: JSON.stringify(input.operations),
+      executionPlanPayloadJson: JSON.stringify(executionInput),
+      diffSummary: input.dryRun?.summary ?? undefined,
+    }).catch((error) => {
+      // Non-fatal: HITL flow can still proceed; log for diagnostics.
+      console.warn("upsertAgentDailies failed", error);
+    });
+    // Intentionally keyed only on stable identifiers so we don't re-fire on
+    // card re-render. reelId is idempotency key on Convex side anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input.storyboardId, input.sourceId]);
+
+  return (
+    <BatchApprovalCard
+      title={`Autonomous Dailies - ${input.operations.length} op(s)`}
+      subtitle={`Reel ${input.sourceId ?? "pending"}`}
+      body={input.dryRun?.summary ?? "Autonomous dailies candidate plan"}
+      operations={input.operations}
+      onApprove={onApprove}
+      onReject={onReject}
+    />
+  );
+}
+
+/**
+ * Wrapper around SimulationCriticPreviewCard that upserts the agent-emitted
+ * simulation run into Convex on mount, mirroring AgentDailiesApprovalCard.
+ */
+function AgentSimulationCriticPreviewCard({
+  input,
+  upsertAgentSimulationRun,
+  onContinue,
+  onReject,
+}: {
+  input: {
+    simulationRunId: string;
+    storyboardId: string;
+    branchId: string;
+    summary: string;
+    riskLevel: DryRunRiskLevel;
+    issues: Array<{
+      code: string;
+      severity: DryRunRiskLevel;
+      message: string;
+      suggestedFix?: string;
+    }>;
+    confidence: number;
+    impactScore: number;
+    executionPlan: {
+      planId: string;
+      storyboardId: string;
+      branchId: string;
+      title: string;
+      rationale: string;
+      source: "simulation_critic";
+      sourceId: string;
+      taskType: "simulation_critic_batch";
+      operations: unknown[];
+      dryRun?: ExecutionPlanInput["dryRun"];
+    };
+  };
+  upsertAgentSimulationRun: (args: Record<string, unknown>) => Promise<unknown>;
+  onContinue: () => Promise<void>;
+  onReject: () => Promise<void>;
+}) {
+  useEffect(() => {
+    if (!input.storyboardId || !input.simulationRunId) {
+      return;
+    }
+    void upsertAgentSimulationRun({
+      storyboardId: input.storyboardId,
+      branchId: input.branchId ?? "main",
+      simulationRunId: input.simulationRunId,
+      summary: input.summary,
+      riskLevel: input.riskLevel,
+      issuesJson: JSON.stringify(input.issues),
+      repairOperationsJson: JSON.stringify(input.executionPlan.operations),
+      confidence: input.confidence,
+      impactScore: input.impactScore,
+      executionPlanPayloadJson: JSON.stringify(input.executionPlan),
+      diffSummary: input.executionPlan.dryRun?.summary ?? undefined,
+    }).catch((error) => {
+      console.warn("upsertAgentSimulationRun failed", error);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input.storyboardId, input.simulationRunId]);
+
+  return (
+    <SimulationCriticPreviewCard
+      simulationRunId={input.simulationRunId}
+      summary={input.summary}
+      riskLevel={input.riskLevel}
+      issues={input.issues}
+      confidence={input.confidence}
+      impactScore={input.impactScore}
+      onContinue={onContinue}
+      onReject={onReject}
+    />
   );
 }
 

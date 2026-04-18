@@ -599,6 +599,40 @@ export const touchStoryboardOpened = mutation({
   },
 });
 
+export const updateEditorState = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    viewport: v.optional(
+      v.object({
+        x: v.number(),
+        y: v.number(),
+        zoom: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const storyboard = await ensureStoryboardEditable(
+      ctx,
+      args.storyboardId,
+      userId,
+    );
+    const existingEditorState =
+      (storyboard.editorState as
+        | { viewport?: { x: number; y: number; zoom: number } }
+        | undefined) ?? {};
+    const nextEditorState = {
+      ...existingEditorState,
+      ...(args.viewport !== undefined ? { viewport: args.viewport } : {}),
+    };
+    await ctx.db.patch(args.storyboardId, {
+      editorState: nextEditorState,
+      updatedAt: Date.now(),
+    });
+    return args.storyboardId;
+  },
+});
+
 export const trashStoryboard = mutation({
   args: {
     storyboardId: v.id("storyboards"),

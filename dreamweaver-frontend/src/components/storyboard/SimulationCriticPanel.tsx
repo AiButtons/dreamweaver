@@ -2,21 +2,11 @@
 
 import { useMemo, useState } from "react";
 
-import type { AutonomousDailiesRecord } from "@/app/storyboard/types";
+import type { SimulationCriticRunRecord } from "@/app/storyboard/types";
 
-type DailiesStatusDecision = "approved" | "rejected" | "applied";
+type SimulationDecision = "applied" | "rejected" | "complete";
 
-type DailiesBoardPanelProps = {
-  dailies: AutonomousDailiesRecord[];
-  onGenerateDailies: () => Promise<void>;
-  onUpdateStatus: (
-    reelId: string,
-    status: DailiesStatusDecision,
-    justification?: string,
-  ) => Promise<void>;
-};
-
-type ProposedOp = {
+type RepairOp = {
   opId?: string;
   op?: string;
   title?: string;
@@ -24,52 +14,58 @@ type ProposedOp = {
   nodeId?: string;
 };
 
-type ContinuityRisk = {
+type CriticIssue = {
   code?: string;
   severity?: string;
   message?: string;
+  suggestedFix?: string;
 };
 
-function parseOps(raw: string): ProposedOp[] {
+function parseOps(raw: string): RepairOp[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is ProposedOp => typeof item === "object" && item !== null);
+    return parsed.filter((item): item is RepairOp => typeof item === "object" && item !== null);
   } catch {
     return [];
   }
 }
 
-function parseRisks(raw: string): ContinuityRisk[] {
+function parseIssues(raw: string): CriticIssue[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is ContinuityRisk => typeof item === "object" && item !== null);
+    return parsed.filter((item): item is CriticIssue => typeof item === "object" && item !== null);
   } catch {
     return [];
   }
 }
 
-function DailiesRow({
+function SimulationRow({
   row,
   onUpdateStatus,
 }: {
-  row: AutonomousDailiesRecord;
-  onUpdateStatus: DailiesBoardPanelProps["onUpdateStatus"];
+  row: SimulationCriticRunRecord;
+  onUpdateStatus: (
+    simulationRunId: string,
+    status: SimulationDecision,
+    justification?: string,
+  ) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [justification, setJustification] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const ops = useMemo(() => parseOps(row.proposedOperationsJson), [row.proposedOperationsJson]);
-  const risks = useMemo(() => parseRisks(row.continuityRisksJson), [row.continuityRisksJson]);
-  const terminal = row.status === "approved" || row.status === "applied" || row.status === "rejected";
+  const ops = useMemo(() => parseOps(row.repairOperationsJson), [row.repairOperationsJson]);
+  const issues = useMemo(() => parseIssues(row.issuesJson), [row.issuesJson]);
+  const terminal =
+    row.status === "applied" || row.status === "rejected" || row.status === "complete";
 
-  const handle = async (status: DailiesStatusDecision) => {
+  const handle = async (status: SimulationDecision) => {
     if (busy) return;
     setBusy(true);
     try {
-      await onUpdateStatus(row.reelId, status, justification.trim() || undefined);
+      await onUpdateStatus(row.simulationRunId, status, justification.trim() || undefined);
       setJustification("");
     } finally {
       setBusy(false);
@@ -78,12 +74,15 @@ function DailiesRow({
 
   return (
     <div className="rounded border border-zinc-800 p-2">
-      <p className="text-xs font-medium">{row.title}</p>
+      <p className="text-xs font-medium">{row.summary || "Simulation critic run"}</p>
       <p className="text-[11px] text-zinc-400">
-        {row.continuityRiskLevel.toUpperCase()} • {row.status} • {ops.length} op(s) • {risks.length} risk(s)
+        {row.riskLevel.toUpperCase()} • {row.status} • {ops.length} repair op(s) • {issues.length} issue(s) •
+        conf {row.confidence.toFixed(2)} • impact {row.impactScore.toFixed(2)}
         {row.approvalTaskId ? " • linked approval" : ""}
       </p>
-      <p className="text-[11px] text-zinc-500">{row.summary}</p>
+      <p className="text-[11px] text-zinc-500">
+        Run {row.simulationRunId} • {row.branchId}
+      </p>
       <button
         type="button"
         className="mt-1 text-[10px] text-zinc-400 underline underline-offset-2"
@@ -94,7 +93,7 @@ function DailiesRow({
       {expanded ? (
         <div className="mt-2 space-y-2 rounded border border-zinc-800 bg-zinc-900/60 p-2">
           {ops.length === 0 ? (
-            <p className="text-[11px] text-zinc-500">No proposed operations.</p>
+            <p className="text-[11px] text-zinc-500">No repair operations.</p>
           ) : (
             <ul className="space-y-1 text-[11px] text-zinc-300">
               {ops.slice(0, 12).map((op, index) => (
@@ -111,13 +110,18 @@ function DailiesRow({
               ) : null}
             </ul>
           )}
-          {risks.length > 0 ? (
+          {issues.length > 0 ? (
             <ul className="space-y-1 text-[11px] text-amber-300/90">
-              {risks.slice(0, 6).map((risk, index) => (
-                <li key={risk.code ?? `risk_${index}`}>
-                  <span className="font-mono uppercase">{risk.severity ?? "med"}</span>
-                  {risk.code ? ` ${risk.code}` : ""}
-                  {risk.message ? ` — ${risk.message}` : ""}
+              {issues.slice(0, 6).map((issue, index) => (
+                <li key={issue.code ?? `issue_${index}`}>
+                  <span className="font-mono uppercase">{issue.severity ?? "med"}</span>
+                  {issue.code ? ` ${issue.code}` : ""}
+                  {issue.message ? ` — ${issue.message}` : ""}
+                  {issue.suggestedFix ? (
+                    <div className="ml-3 mt-0.5 text-emerald-300/80">
+                      Fix: {issue.suggestedFix}
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -138,18 +142,18 @@ function DailiesRow({
         <button
           type="button"
           className="rounded bg-emerald-700 px-2 py-1 text-[10px] disabled:opacity-40"
-          onClick={() => void handle("approved")}
+          onClick={() => void handle("applied")}
           disabled={busy || terminal}
         >
-          Approve
+          Apply
         </button>
         <button
           type="button"
           className="rounded bg-blue-700 px-2 py-1 text-[10px] disabled:opacity-40"
-          onClick={() => void handle("applied")}
+          onClick={() => void handle("complete")}
           disabled={busy || terminal}
         >
-          Mark Applied
+          Complete
         </button>
         <button
           type="button"
@@ -164,33 +168,43 @@ function DailiesRow({
   );
 }
 
-export function DailiesBoardPanel({
-  dailies,
-  onGenerateDailies,
+type SimulationCriticPanelProps = {
+  simulationRuns: SimulationCriticRunRecord[];
+  onRunCritic: () => Promise<void>;
+  onUpdateStatus: (
+    simulationRunId: string,
+    status: SimulationDecision,
+    justification?: string,
+  ) => Promise<void>;
+};
+
+export function SimulationCriticPanel({
+  simulationRuns,
+  onRunCritic,
   onUpdateStatus,
-}: DailiesBoardPanelProps) {
-  const rows = dailies.slice(0, 6);
+}: SimulationCriticPanelProps) {
+  const rows = simulationRuns.slice(0, 6);
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-950/95 text-zinc-100 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[11px] uppercase tracking-wide text-zinc-400">Dailies Board</p>
-          <h3 className="mt-1 text-sm font-semibold">Candidate Reels</h3>
+          <p className="text-[11px] uppercase tracking-wide text-zinc-400">Simulation Critic</p>
+          <h3 className="mt-1 text-sm font-semibold">Repair Batches</h3>
         </div>
         <button
           type="button"
           className="rounded bg-zinc-800 px-2 py-1 text-xs"
-          onClick={() => void onGenerateDailies()}
+          onClick={() => void onRunCritic()}
         >
-          Generate
+          Run Critic
         </button>
       </div>
       {rows.length === 0 ? (
-        <p className="mt-2 text-[11px] text-zinc-400">No reels generated yet.</p>
+        <p className="mt-2 text-[11px] text-zinc-400">No simulation runs yet.</p>
       ) : (
         <div className="mt-3 space-y-2 max-h-[28rem] overflow-y-auto">
           {rows.map((row) => (
-            <DailiesRow key={row._id} row={row} onUpdateStatus={onUpdateStatus} />
+            <SimulationRow key={row._id} row={row} onUpdateStatus={onUpdateStatus} />
           ))}
         </div>
       )}

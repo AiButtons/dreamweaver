@@ -4,7 +4,8 @@ import {
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
 import { LangGraphAgent } from "@copilotkit/runtime/langgraph";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "@/lib/auth-server";
 import { resolveSecretByHandleId, resolveSecretByProviderScope } from "@/server/vault/adapter";
 
 const deploymentUrl = process.env.LANGGRAPH_STORYBOARD_DEPLOYMENT_URL ?? "http://localhost:8123";
@@ -35,6 +36,21 @@ const resolveLangsmithApiKey = async () => {
 const serviceAdapter = new ExperimentalEmptyAdapter();
 
 export const POST = async (request: NextRequest) => {
+  // Require an authenticated session before proxying to the LangGraph agent.
+  // Unauthenticated callers cannot drive the agent, even though downstream
+  // mutations have their own `requireUser` guard — we want the agent itself
+  // to run only for signed-in users so prompts, audits, and tool calls all
+  // attribute cleanly to a driver.
+  let sessionToken: string | null | undefined = null;
+  try {
+    sessionToken = await getToken();
+  } catch {
+    sessionToken = null;
+  }
+  if (!sessionToken) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const langsmithApiKey = await resolveLangsmithApiKey();
   const storyboardAgent = new LangGraphAgent({
     deploymentUrl,

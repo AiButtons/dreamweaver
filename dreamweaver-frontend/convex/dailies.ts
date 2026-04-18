@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { ensureStoryboardEditable, requireUser } from "./storyboardAccess";
+import { createTaskCore, resolveTaskCore } from "./approvals";
 
 const nodeType = v.union(
   v.literal("scene"),
@@ -237,6 +238,43 @@ export const generateAutonomousDailies = mutation({
       ? `Generated ${selectedMedia.length} candidate clip(s) with ${continuityRisks.length} continuity risk(s).`
       : "No media clips found. Proposed generation-first dailies recovery plan.";
 
+    const executionPlan = {
+      planId,
+      storyboardId: args.storyboardId,
+      branchId: args.branchId,
+      title: `${title} - Batch Apply`,
+      rationale: "Producer-approved autonomous dailies operations.",
+      source: "dailies" as const,
+      sourceId: reelId,
+      taskType: "dailies_batch" as const,
+      operations: proposedOperations,
+      dryRun: {
+        valid: true,
+        riskLevel: continuityRiskLevel,
+        summary,
+        issues: continuityRisks,
+        estimatedTotalCost: Number((proposedOperations.length * 0.22).toFixed(2)),
+        estimatedDurationSec: Number((Math.max(proposedOperations.length, 1) * 2.3).toFixed(2)),
+        planHash: `daily_${hashString(JSON.stringify(proposedOperations))}`,
+      },
+    };
+
+    // Atomically: create the approval task (with the full executionPlan as
+    // payload so a reviewer sees exactly what will run), insert the dailies
+    // row pointing at that task, then patch the task's dedupeKey via reelId
+    // so regenerating the same reel dedupes instead of piling up tasks.
+    const approvalTaskId = await createTaskCore(ctx, {
+      storyboardId: args.storyboardId,
+      userId,
+      taskType: "dailies_batch",
+      title,
+      rationale: summary,
+      diffSummary: `${proposedOperations.length} op(s), ${continuityRisks.length} risk(s), risk=${continuityRiskLevel}`,
+      payloadJson: JSON.stringify(executionPlan),
+      dedupeKey: `dailies:${reelId}`,
+      status: "waiting_for_human",
+    });
+
     await ctx.db.insert("autonomousDailies", {
       storyboardId: args.storyboardId,
       userId,
@@ -251,6 +289,7 @@ export const generateAutonomousDailies = mutation({
       continuityRisksJson: JSON.stringify(continuityRisks),
       proposedOperationsJson: JSON.stringify(proposedOperations),
       status: "drafted",
+      approvalTaskId,
       createdAt: now,
       updatedAt: now,
     });
@@ -277,30 +316,94 @@ export const generateAutonomousDailies = mutation({
       highlights,
       continuityRiskLevel,
       continuityRisks,
+      approvalTaskId,
       clips: selectedMedia.map((asset) => ({
         nodeId: asset.nodeId,
         mediaAssetId: asset._id,
         kind: asset.kind,
         sourceUrl: asset.sourceUrl,
       })),
-      executionPlan: {
-        planId,
-        storyboardId: args.storyboardId,
-        branchId: args.branchId,
-        title: `${title} - Batch Apply`,
-        rationale: "Producer-approved autonomous dailies operations.",
-        operations: proposedOperations,
-        dryRun: {
-          valid: true,
-          riskLevel: continuityRiskLevel,
-          summary,
-          issues: continuityRisks,
-          estimatedTotalCost: Number((proposedOperations.length * 0.22).toFixed(2)),
-          estimatedDurationSec: Number((Math.max(proposedOperations.length, 1) * 2.3).toFixed(2)),
-          planHash: `daily_${hashString(JSON.stringify(proposedOperations))}`,
-        },
-      },
+      executionPlan,
     };
+  },
+});
+
+/**
+ * Idempotent upsert called when the storyboard agent emits an
+ * `approve_dailies_batch` HITL card — the dailies panel should reflect the
+ * agent's proposal immediately (before the producer decides) and the cascade
+ * from `updateDailiesStatus` into `resolveTaskCore` needs a linked task to
+ * exist. Keyed by `(storyboardId, reelId)`; re-emitting the same reelId is a
+ * no-op that returns the existing ids.
+ */
+export const upsertAgentDailies = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.string(),
+    reelId: v.string(),
+    title: v.string(),
+    summary: v.string(),
+    continuityRiskLevel: v.union(
+      v.literal("low"),
+      v.literal("medium"),
+      v.literal("high"),
+      v.literal("critical"),
+    ),
+    continuityRisksJson: v.string(),
+    proposedOperationsJson: v.string(),
+    executionPlanPayloadJson: v.string(),
+    clipNodeIds: v.optional(v.array(v.string())),
+    highlights: v.optional(v.array(v.string())),
+    diffSummary: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const existing = await ctx.db
+      .query("autonomousDailies")
+      .withIndex("by_storyboard_reel", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("reelId", args.reelId),
+      )
+      .unique();
+    if (existing) {
+      return { reelId: args.reelId, _id: existing._id, approvalTaskId: existing.approvalTaskId };
+    }
+
+    const approvalTaskId = await createTaskCore(ctx, {
+      storyboardId: args.storyboardId,
+      userId,
+      taskType: "dailies_batch",
+      title: args.title,
+      rationale: args.summary,
+      diffSummary: args.diffSummary,
+      payloadJson: args.executionPlanPayloadJson,
+      dedupeKey: `dailies:${args.reelId}`,
+      status: "waiting_for_human",
+      origin: "agent",
+    });
+
+    const now = Date.now();
+    const insertedId = await ctx.db.insert("autonomousDailies", {
+      storyboardId: args.storyboardId,
+      userId,
+      branchId: args.branchId,
+      reelId: args.reelId,
+      title: args.title,
+      summary: args.summary,
+      clipNodeIds: args.clipNodeIds ?? [],
+      clipMediaAssetIds: [],
+      highlights: args.highlights ?? [],
+      continuityRiskLevel: args.continuityRiskLevel,
+      continuityRisksJson: args.continuityRisksJson,
+      proposedOperationsJson: args.proposedOperationsJson,
+      status: "drafted",
+      approvalTaskId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(args.storyboardId, { updatedAt: now });
+    return { reelId: args.reelId, _id: insertedId, approvalTaskId };
   },
 });
 
@@ -309,6 +412,7 @@ export const updateDailiesStatus = mutation({
     storyboardId: v.id("storyboards"),
     reelId: v.string(),
     status: v.union(v.literal("approved"), v.literal("rejected"), v.literal("applied")),
+    justification: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -329,6 +433,21 @@ export const updateDailiesStatus = mutation({
       status: args.status,
       updatedAt: now,
     });
+
+    // Cascade into the linked approval task so the approvals feed matches the
+    // reel's state. "approved" and "applied" both count as human-approved
+    // ("applied" meaning the producer has also confirmed runtime execution).
+    // "rejected" flips the task to rejected. resolveTaskCore is idempotent —
+    // re-issuing the same decision is a no-op.
+    if (reel.approvalTaskId) {
+      await resolveTaskCore(ctx, {
+        taskId: reel.approvalTaskId,
+        userId,
+        approved: args.status !== "rejected",
+        justification: args.justification,
+      });
+    }
+
     await ctx.db.patch(args.storyboardId, { updatedAt: now });
     return reel._id;
   },
@@ -514,6 +633,44 @@ export const runSimulationCritic = mutation({
       issueCount: issues.length,
       now,
     }))}`;
+
+    const executionPlan = {
+      planId: `critic_plan_${simulationRunId}`,
+      storyboardId: args.storyboardId,
+      branchId: args.branchId,
+      title: "Simulation Critic Repair Batch",
+      rationale: summary,
+      source: "simulation_critic" as const,
+      sourceId: simulationRunId,
+      taskType: "simulation_critic_batch" as const,
+      operations: repairOperations,
+      dryRun: {
+        valid: true,
+        riskLevel: computedRisk,
+        summary,
+        issues,
+        estimatedTotalCost: Number((repairOperations.length * 0.15).toFixed(2)),
+        estimatedDurationSec: Number((Math.max(repairOperations.length, 1) * 1.8).toFixed(2)),
+        planHash: `critic_${hashString(JSON.stringify(repairOperations))}`,
+      },
+    };
+
+    // Atomically: create the approval task (with the full executionPlan as
+    // payload so a reviewer sees exactly what will run), insert the simulation
+    // run pointing at that task, dedupeKey scoped by simulationRunId so a
+    // regenerated run dedupes instead of piling up tasks.
+    const approvalTaskId = await createTaskCore(ctx, {
+      storyboardId: args.storyboardId,
+      userId,
+      taskType: "simulation_critic_batch",
+      title: "Simulation Critic Repair Batch",
+      rationale: summary,
+      diffSummary: `${repairOperations.length} repair op(s), ${issues.length} issue(s), risk=${computedRisk}`,
+      payloadJson: JSON.stringify(executionPlan),
+      dedupeKey: `simulation:${simulationRunId}`,
+      status: "waiting_for_human",
+    });
+
     await ctx.db.insert("simulationCriticRuns", {
       storyboardId: args.storyboardId,
       userId,
@@ -527,6 +684,7 @@ export const runSimulationCritic = mutation({
       repairOperationsJson: JSON.stringify(repairOperations),
       confidence,
       impactScore,
+      approvalTaskId,
       createdAt: now,
       updatedAt: now,
     });
@@ -553,24 +711,88 @@ export const runSimulationCritic = mutation({
       repairOperations,
       confidence,
       impactScore,
-      executionPlan: {
-        planId: `critic_plan_${simulationRunId}`,
-        storyboardId: args.storyboardId,
-        branchId: args.branchId,
-        title: "Simulation Critic Repair Batch",
-        rationale: summary,
-        operations: repairOperations,
-        dryRun: {
-          valid: true,
-          riskLevel: computedRisk,
-          summary,
-          issues,
-          estimatedTotalCost: Number((repairOperations.length * 0.15).toFixed(2)),
-          estimatedDurationSec: Number((Math.max(repairOperations.length, 1) * 1.8).toFixed(2)),
-          planHash: `critic_${hashString(JSON.stringify(repairOperations))}`,
-        },
-      },
+      approvalTaskId,
+      executionPlan,
     };
+  },
+});
+
+/**
+ * Idempotent upsert for agent-emitted `preview_simulation_critic_plan`. See
+ * `upsertAgentDailies` for rationale — mirror behaviour keyed by
+ * `(storyboardId, simulationRunId)`.
+ */
+export const upsertAgentSimulationRun = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.string(),
+    simulationRunId: v.string(),
+    sourcePlanId: v.optional(v.string()),
+    summary: v.string(),
+    riskLevel: v.union(
+      v.literal("low"),
+      v.literal("medium"),
+      v.literal("high"),
+      v.literal("critical"),
+    ),
+    issuesJson: v.string(),
+    repairOperationsJson: v.string(),
+    confidence: v.number(),
+    impactScore: v.number(),
+    executionPlanPayloadJson: v.string(),
+    diffSummary: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const existing = await ctx.db
+      .query("simulationCriticRuns")
+      .withIndex("by_storyboard_run", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("simulationRunId", args.simulationRunId),
+      )
+      .unique();
+    if (existing) {
+      return {
+        simulationRunId: args.simulationRunId,
+        _id: existing._id,
+        approvalTaskId: existing.approvalTaskId,
+      };
+    }
+
+    const approvalTaskId = await createTaskCore(ctx, {
+      storyboardId: args.storyboardId,
+      userId,
+      taskType: "simulation_critic_batch",
+      title: "Simulation Critic Repair Batch",
+      rationale: args.summary,
+      diffSummary: args.diffSummary,
+      payloadJson: args.executionPlanPayloadJson,
+      dedupeKey: `simulation:${args.simulationRunId}`,
+      status: "waiting_for_human",
+      origin: "agent",
+    });
+
+    const now = Date.now();
+    const insertedId = await ctx.db.insert("simulationCriticRuns", {
+      storyboardId: args.storyboardId,
+      userId,
+      branchId: args.branchId,
+      simulationRunId: args.simulationRunId,
+      sourcePlanId: args.sourcePlanId,
+      status: "waiting_for_human",
+      summary: args.summary,
+      riskLevel: args.riskLevel,
+      issuesJson: args.issuesJson,
+      repairOperationsJson: args.repairOperationsJson,
+      confidence: args.confidence,
+      impactScore: args.impactScore,
+      approvalTaskId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(args.storyboardId, { updatedAt: now });
+    return { simulationRunId: args.simulationRunId, _id: insertedId, approvalTaskId };
   },
 });
 
@@ -579,6 +801,7 @@ export const updateSimulationRunStatus = mutation({
     storyboardId: v.id("storyboards"),
     simulationRunId: v.string(),
     status: v.union(v.literal("applied"), v.literal("rejected"), v.literal("failed"), v.literal("complete")),
+    justification: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -599,6 +822,22 @@ export const updateSimulationRunStatus = mutation({
       status: args.status,
       updatedAt: now,
     });
+
+    // Cascade into the linked approval task. "applied" and "complete" are
+    // human-approved paths (producer signed off, then the batch succeeded or
+    // was marked applied). "rejected" flips the task to rejected. "failed" is
+    // a runtime-failure signal — leave the approval decision untouched so the
+    // reviewer can still act on the task (re-approve / reject / retry) once
+    // the failure is investigated.
+    if (run.approvalTaskId && args.status !== "failed") {
+      await resolveTaskCore(ctx, {
+        taskId: run.approvalTaskId,
+        userId,
+        approved: args.status !== "rejected",
+        justification: args.justification,
+      });
+    }
+
     await ctx.db.patch(args.storyboardId, { updatedAt: now });
     return run._id;
   },

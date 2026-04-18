@@ -308,6 +308,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -412,6 +413,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -467,6 +469,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -544,6 +547,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -645,6 +649,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -727,6 +732,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 
@@ -774,6 +780,7 @@ describe("StoryboardCopilotBridge UI integration", () => {
         approvals={[]}
         mode="graph_studio"
         runtimeResolvedTeam={runtimeTeam}
+        userIdentity={null}
       />,
     );
 

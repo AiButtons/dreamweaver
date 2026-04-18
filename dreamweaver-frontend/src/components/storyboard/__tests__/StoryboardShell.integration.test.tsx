@@ -179,8 +179,12 @@ describe("Storyboard shell integration", () => {
         continuityBundle={continuityBundle}
         currentMode="graph_studio"
         onSelectTeam={async () => {}}
-        onCreateTeam={async () => "team_1"}
-        onCreateRevision={async () => ({ revisionId: "rev_1", version: 1 })}
+        onCreateTeam={async () => {
+          void "team_1";
+        }}
+        onCreateRevision={async () => {
+          void ({ revisionId: "rev_1", version: 1 });
+        }}
         onGenerateDraft={async () => ({
           draftId: "draft_1",
           generatedSpec: {
@@ -191,12 +195,15 @@ describe("Storyboard shell integration", () => {
             resourceScopes: [],
           },
         } as TeamPromptDraft)}
-        onApplyDraft={async () => ({ revisionId: "rev_1" })}
+        onApplyDraft={async () => {
+          void ({ revisionId: "rev_1" });
+        }}
         onPublishRevision={async () => {}}
         onRollbackRevision={async () => {}}
         onUpdateMember={async () => {}}
         onGenerateDailies={async () => {}}
         onUpdateDailiesStatus={async () => {}}
+        onUpdateSimulationRunStatus={async () => {}}
         onRunCritic={async () => {}}
         onCreateBranch={async () => {}}
         onCherryPickLatest={async () => {}}

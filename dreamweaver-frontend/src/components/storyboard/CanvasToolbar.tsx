@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Plus, Trash2, Maximize2, ZoomIn, ZoomOut, MoreHorizontal, Clapperboard, Film } from "lucide-react";
+import { Plus, Trash2, Maximize2, ZoomIn, ZoomOut, MoreHorizontal, Clapperboard, Film, Undo2, Redo2 } from "lucide-react";
 import type { NodeType } from "@/app/storyboard/types";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,6 +21,10 @@ interface CanvasToolbarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   hasSelection: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
@@ -30,6 +34,10 @@ const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   onZoomIn,
   onZoomOut,
   hasSelection,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
 }) => {
   return (
     <TooltipProvider delayDuration={150}>
@@ -75,6 +83,44 @@ const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
               </TooltipTrigger>
               <TooltipContent side="left">Delete selected</TooltipContent>
             </Tooltip>
+          ) : null}
+
+          {(onUndo || onRedo) ? (
+            <>
+              <div className="h-px bg-white/10 my-1" />
+              {onUndo ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="rounded-xl hover:bg-white/10 disabled:opacity-40"
+                      onClick={onUndo}
+                      disabled={!canUndo}
+                    >
+                      <Undo2 className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">Undo (⌘Z)</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {onRedo ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="rounded-xl hover:bg-white/10 disabled:opacity-40"
+                      onClick={onRedo}
+                      disabled={!canRedo}
+                    >
+                      <Redo2 className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">Redo (⌘⇧Z)</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </>
           ) : null}
 
           <div className="h-px bg-white/10 my-1" />

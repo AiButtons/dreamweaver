@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ReviewInboxPanel } from "@/components/storyboard/ReviewInboxPanel";
 import { TeamBuilderPanel } from "@/components/storyboard/TeamBuilderPanel";
 import { DailiesBoardPanel } from "@/components/storyboard/DailiesBoardPanel";
+import { SimulationCriticPanel } from "@/components/storyboard/SimulationCriticPanel";
 import { TimelineTheaterPanel } from "@/components/storyboard/TimelineTheaterPanel";
 import { ContinuityOSPanel } from "@/components/storyboard/ContinuityOSPanel";
 import { MissionConsolePanel } from "@/components/storyboard/MissionConsolePanel";
@@ -79,7 +80,16 @@ export function ProductionHubDrawer(props: {
   onUpdateMember: (teamId: string, revisionId: string, member: TeamMemberConfig) => Promise<void>;
 
   onGenerateDailies: () => Promise<void>;
-  onUpdateDailiesStatus: (reelId: string, status: "approved" | "rejected" | "applied") => Promise<void>;
+  onUpdateDailiesStatus: (
+    reelId: string,
+    status: "approved" | "rejected" | "applied",
+    justification?: string,
+  ) => Promise<void>;
+  onUpdateSimulationRunStatus: (
+    simulationRunId: string,
+    status: "applied" | "rejected" | "complete",
+    justification?: string,
+  ) => Promise<void>;
 
   onRunCritic: () => Promise<void>;
   onCreateBranch: () => Promise<void>;
@@ -87,6 +97,11 @@ export function ProductionHubDrawer(props: {
   onComputeLatestDiff: () => Promise<void>;
 
   onDetectContradictions: () => Promise<void>;
+  onResolveViolation?: (
+    violationId: string,
+    status: "acknowledged" | "resolved",
+  ) => Promise<void>;
+  onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
 }) {
   const {
     pendingApprovalsCount,
@@ -208,20 +223,29 @@ export function ProductionHubDrawer(props: {
                   />
                 </TabsContent>
                 <TabsContent value="playback">
-                  <TimelineTheaterPanel
-                    simulationRuns={simulationRuns}
-                    onRunCritic={props.onRunCritic}
-                    branches={branches}
-                    commits={commits}
-                    onCreateBranch={props.onCreateBranch}
-                    onCherryPickLatest={props.onCherryPickLatest}
-                    onComputeLatestDiff={props.onComputeLatestDiff}
-                  />
+                  <div className="space-y-3">
+                    <TimelineTheaterPanel
+                      simulationRuns={simulationRuns}
+                      onRunCritic={props.onRunCritic}
+                      branches={branches}
+                      commits={commits}
+                      onCreateBranch={props.onCreateBranch}
+                      onCherryPickLatest={props.onCherryPickLatest}
+                      onComputeLatestDiff={props.onComputeLatestDiff}
+                    />
+                    <SimulationCriticPanel
+                      simulationRuns={simulationRuns}
+                      onRunCritic={props.onRunCritic}
+                      onUpdateStatus={props.onUpdateSimulationRunStatus}
+                    />
+                  </div>
                 </TabsContent>
                 <TabsContent value="continuity">
                   <ContinuityOSPanel
                     bundle={continuityBundle}
                     onDetectContradictions={props.onDetectContradictions}
+                    onResolveViolation={props.onResolveViolation}
+                    onPublishIdentityPack={props.onPublishIdentityPack}
                   />
                 </TabsContent>
                 <TabsContent value="monitor">

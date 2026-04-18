@@ -96,8 +96,17 @@ type SnapshotEdge = {
   isPrimary?: boolean;
 };
 
+type SavedViewport = { x: number; y: number; zoom: number };
+
 type StoryboardSnapshot = {
-  storyboard: { _id: string; title: string; updatedAt?: number } | null;
+  storyboard:
+    | {
+        _id: string;
+        title: string;
+        updatedAt?: number;
+        editorState?: { viewport?: SavedViewport } | null;
+      }
+    | null;
   nodes: SnapshotNode[];
   edges: SnapshotEdge[];
   approvals: Array<{ _id: string; taskType: string; status: string; title: string }>;
@@ -117,7 +126,11 @@ type TeamRevisionRow = {
 };
 
 type AuthSessionEnvelope = {
-  user?: { id?: string | null } | null;
+  user?: {
+    id?: string | null;
+    email?: string | null;
+    name?: string | null;
+  } | null;
   session?: { id?: string | null } | null;
 } | null;
 
@@ -242,6 +255,15 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const sessionData = (sessionState.data as AuthSessionEnvelope | undefined) ?? null;
   const isAuthLoading = sessionState.isPending;
   const isAuthenticated = Boolean(sessionData?.user?.id ?? sessionData?.session?.id);
+  const userIdentity = useMemo(() => {
+    const userId = sessionData?.user?.id ?? null;
+    if (!userId) return null;
+    return {
+      userId,
+      email: sessionData?.user?.email ?? null,
+      name: sessionData?.user?.name ?? null,
+    };
+  }, [sessionData?.user?.id, sessionData?.user?.email, sessionData?.user?.name]);
 
   const snapshot = useQuery(
     queryRef("storyboards:getStoryboardSnapshot"),
@@ -347,13 +369,19 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const generateAutonomousDailies = useMutation(mutationRef("dailies:generateAutonomousDailies"));
   const updateDailiesStatus = useMutation(mutationRef("dailies:updateDailiesStatus"));
   const runSimulationCritic = useMutation(mutationRef("dailies:runSimulationCritic"));
+  const updateSimulationRunStatus = useMutation(
+    mutationRef("dailies:updateSimulationRunStatus"),
+  );
   const detectContradictions = useMutation(mutationRef("continuityOS:detectContradictions"));
+  const resolveViolationMutation = useMutation(mutationRef("continuityOS:resolveViolation"));
+  const publishIdentityPackMutation = useMutation(mutationRef("continuityOS:publishIdentityPack"));
   const createBranchMutation = useMutation(mutationRef("narrativeGit:createBranch"));
   const cherryPickCommitMutation = useMutation(mutationRef("narrativeGit:cherryPickCommit"));
   const computeSemanticDiffMutation = useMutation(mutationRef("narrativeGit:computeSemanticDiff"));
   const createApprovalTaskMutation = useMutation(mutationRef("approvals:createTask"));
   const resolveApprovalTaskMutation = useMutation(mutationRef("approvals:resolveTask"));
   const touchStoryboardOpened = useMutation(mutationRef("storyboards:touchStoryboardOpened"));
+  const updateEditorStateMutation = useMutation(mutationRef("storyboards:updateEditorState"));
 
   useEffect(() => {
     if (isAuthLoading) {
@@ -443,6 +471,171 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
 
   // Inspector is a floating panel shown only when a node is selected.
 
+  // --- Undo/redo stack -----------------------------------------------------
+  // We capture structural snapshots ({ nodes, edges }) before each mutation
+  // that should be reversible (add node, delete node, connect, drag). Undo
+  // pops a snapshot into a "future" stack and restores local state; a server
+  // resync diff replays the difference as upsertNode/deleteNode/upsertEdge
+  // calls so Convex stays in sync with the restored snapshot.
+  type GraphSnapshot = { nodes: StoryNode[]; edges: StoryEdge[] };
+  const UNDO_LIMIT = 50;
+  const undoStackRef = useRef<GraphSnapshot[]>([]);
+  const redoStackRef = useRef<GraphSnapshot[]>([]);
+  const [undoDepth, setUndoDepth] = useState(0);
+  const [redoDepth, setRedoDepth] = useState(0);
+  const isRestoringRef = useRef(false);
+
+  const captureHistory = useCallback(() => {
+    if (isRestoringRef.current) return;
+    undoStackRef.current.push({
+      nodes: nodes.map((n) => ({ ...n, position: { ...n.position } })),
+      edges: edges.map((e) => ({ ...e })),
+    });
+    if (undoStackRef.current.length > UNDO_LIMIT) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+    setUndoDepth(undoStackRef.current.length);
+    setRedoDepth(0);
+  }, [edges, nodes]);
+
+  const resyncGraphToServer = useCallback(
+    async (target: GraphSnapshot, previous: GraphSnapshot) => {
+      if (!activeStoryboardId) return;
+      const targetNodeIds = new Set(target.nodes.map((n) => n.id));
+      const targetEdgeIds = new Set(target.edges.map((e) => e.id));
+      // Delete nodes present before but not in target.
+      const nodesToDelete = previous.nodes.filter(
+        (n) => !targetNodeIds.has(n.id),
+      );
+      // Upsert all target nodes (covers re-add and position restoration).
+      await Promise.all([
+        ...nodesToDelete.map((node) =>
+          deleteNode({
+            storyboardId: activeStoryboardId,
+            nodeId: node.id,
+          }).catch((err) =>
+            console.warn("undo/redo deleteNode failed", err),
+          ),
+        ),
+        ...target.nodes.map((node) =>
+          upsertNode({
+            storyboardId: activeStoryboardId,
+            nodeId: node.id,
+            nodeType: node.data.nodeType,
+            label: node.data.label,
+            segment: node.data.segment,
+            position: node.position,
+            continuityStatus: node.data.continuity.consistencyStatus,
+          }).catch((err) =>
+            console.warn("undo/redo upsertNode failed", err),
+          ),
+        ),
+      ]);
+      // Upsert all target edges (idempotent on existing).
+      await Promise.all(
+        target.edges.map((edge) => {
+          const storyEdge = edge as StoryEdge;
+          return upsertEdge({
+            storyboardId: activeStoryboardId,
+            edgeId: edge.id,
+            sourceNodeId: edge.source,
+            targetNodeId: edge.target,
+            edgeType: storyEdge.data?.edgeType ?? "serial",
+            branchId: storyEdge.data?.branchId,
+            order: storyEdge.data?.order,
+            isPrimary: storyEdge.data?.isPrimary ?? true,
+          }).catch((err) =>
+            console.warn("undo/redo upsertEdge failed", err),
+          );
+        }),
+      );
+      // Note: edge deletions for edges removed during delete-node cascade
+      // happen server-side automatically when the node is deleted. Dangling
+      // edges with no server counterpart will naturally absent on next snapshot.
+      // Edge-only deletions (without node delete) are currently rare in the
+      // reversible set, so we accept best-effort convergence here.
+      void targetEdgeIds;
+    },
+    [activeStoryboardId, deleteNode, upsertEdge, upsertNode],
+  );
+
+  const undo = useCallback(() => {
+    if (undoStackRef.current.length === 0) return;
+    const previous: GraphSnapshot = {
+      nodes: nodes.map((n) => ({ ...n, position: { ...n.position } })),
+      edges: edges.map((e) => ({ ...e })),
+    };
+    const target = undoStackRef.current.pop()!;
+    redoStackRef.current.push(previous);
+    setUndoDepth(undoStackRef.current.length);
+    setRedoDepth(redoStackRef.current.length);
+    isRestoringRef.current = true;
+    setNodes(target.nodes);
+    setEdges(target.edges);
+    setSelectedNode(null);
+    setInspectorAnchor(null);
+    // Release the restore guard on next microtask so captureHistory won't
+    // double-record the restore itself.
+    Promise.resolve().then(() => {
+      isRestoringRef.current = false;
+    });
+    void resyncGraphToServer(target, previous);
+  }, [edges, nodes, resyncGraphToServer, setEdges, setNodes]);
+
+  const redo = useCallback(() => {
+    if (redoStackRef.current.length === 0) return;
+    const previous: GraphSnapshot = {
+      nodes: nodes.map((n) => ({ ...n, position: { ...n.position } })),
+      edges: edges.map((e) => ({ ...e })),
+    };
+    const target = redoStackRef.current.pop()!;
+    undoStackRef.current.push(previous);
+    setUndoDepth(undoStackRef.current.length);
+    setRedoDepth(redoStackRef.current.length);
+    isRestoringRef.current = true;
+    setNodes(target.nodes);
+    setEdges(target.edges);
+    setSelectedNode(null);
+    setInspectorAnchor(null);
+    Promise.resolve().then(() => {
+      isRestoringRef.current = false;
+    });
+    void resyncGraphToServer(target, previous);
+  }, [edges, nodes, resyncGraphToServer, setEdges, setNodes]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const isMod = event.metaKey || event.ctrlKey;
+      if (!isMod) return;
+      const target = event.target as HTMLElement | null;
+      // Ignore when user is typing in an input/textarea/contenteditable.
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      if (event.key.toLowerCase() === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if (
+        (event.key.toLowerCase() === "z" && event.shiftKey) ||
+        event.key.toLowerCase() === "y"
+      ) {
+        event.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
   const updateNodeData = useCallback(
     (id: string, partialData: Partial<StoryNode["data"]>) => {
       setNodes((currentNodes) =>
@@ -504,6 +697,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       if (!params.source || !params.target) {
         return;
       }
+      captureHistory();
       const edgeId = `e${params.source}-${params.target}-${generateId()}`;
       const nextEdge: StoryEdge = {
         id: edgeId,
@@ -532,7 +726,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         });
       }
     },
-    [activeStoryboardId, edges, persistEdge, recordEvent, refreshHistory, setEdges],
+    [activeStoryboardId, captureHistory, edges, persistEdge, recordEvent, refreshHistory, setEdges],
   );
 
   const anchorNearNode = useCallback((node: StoryNode) => {
@@ -567,12 +761,14 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const onNodeDragStop = useCallback(
     (_: React.MouseEvent, node: Node) => {
       const storyNode = node as StoryNode;
+      captureHistory();
       void persistNode(storyNode);
     },
-    [persistNode],
+    [captureHistory, persistNode],
   );
 
   const handleAddTypedNode = useCallback((nodeType: NodeType) => {
+    captureHistory();
     const id = generateId();
     let position = { x: 100, y: 100 };
     if (selectedNode && rfInstance) {
@@ -634,6 +830,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     }
   }, [
     activeStoryboardId,
+    captureHistory,
     edges,
     persistEdge,
     persistNode,
@@ -650,6 +847,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     if (!selectedNode) {
       return;
     }
+    captureHistory();
     const deletingId = selectedNode.id;
     setNodes((current) => current.filter((node) => node.id !== deletingId));
     setEdges((current) => current.filter((edge) => edge.source !== deletingId && edge.target !== deletingId));
@@ -665,7 +863,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         ancestorNodeIds: [],
       });
     }
-  }, [activeStoryboardId, deleteNode, recordEvent, selectedNode, setEdges, setNodes]);
+  }, [activeStoryboardId, captureHistory, deleteNode, recordEvent, selectedNode, setEdges, setNodes]);
 
   const handleFitView = useCallback(() => {
     if (rfInstance) {
@@ -682,6 +880,50 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       rfInstance.zoomOut({ duration: 500 });
     }
   }, [rfInstance]);
+
+  const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedViewportRef = useRef<SavedViewport | null>(null);
+  const handleViewportMoveEnd = useCallback(
+    (_event: unknown, viewport: SavedViewport) => {
+      if (!activeStoryboardId) {
+        return;
+      }
+      const last = lastSavedViewportRef.current;
+      if (
+        last &&
+        Math.abs(last.x - viewport.x) < 0.5 &&
+        Math.abs(last.y - viewport.y) < 0.5 &&
+        Math.abs(last.zoom - viewport.zoom) < 0.001
+      ) {
+        return;
+      }
+      if (viewportSaveTimerRef.current) {
+        clearTimeout(viewportSaveTimerRef.current);
+      }
+      viewportSaveTimerRef.current = setTimeout(() => {
+        lastSavedViewportRef.current = viewport;
+        void updateEditorStateMutation({
+          storyboardId: activeStoryboardId,
+          viewport,
+        }).catch((error) => {
+          console.warn("Failed to persist viewport", error);
+        });
+      }, 400);
+    },
+    [activeStoryboardId, updateEditorStateMutation],
+  );
+  useEffect(() => {
+    return () => {
+      if (viewportSaveTimerRef.current) {
+        clearTimeout(viewportSaveTimerRef.current);
+      }
+    };
+  }, []);
+  const defaultViewport = useMemo<SavedViewport | undefined>(() => {
+    const vp = snapshot?.storyboard?.editorState?.viewport;
+    if (!vp) return undefined;
+    return { x: vp.x, y: vp.y, zoom: vp.zoom };
+  }, [snapshot?.storyboard?.editorState?.viewport]);
 
   const handleEditNode = useCallback(
     async (nodeId: string, instruction: string) => {
@@ -1059,7 +1301,11 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   }, [activeStoryboardId, generateAutonomousDailies]);
 
   const handleUpdateDailiesStatus = useCallback(
-    async (reelId: string, status: "approved" | "rejected" | "applied") => {
+    async (
+      reelId: string,
+      status: "approved" | "rejected" | "applied",
+      justification?: string,
+    ) => {
       if (!activeStoryboardId) {
         return;
       }
@@ -1067,6 +1313,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         storyboardId: activeStoryboardId,
         reelId,
         status,
+        ...(justification ? { justification } : {}),
       });
     },
     [activeStoryboardId, updateDailiesStatus],
@@ -1082,6 +1329,25 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     });
   }, [activeStoryboardId, runSimulationCritic]);
 
+  const handleUpdateSimulationRunStatus = useCallback(
+    async (
+      simulationRunId: string,
+      status: "applied" | "rejected" | "complete",
+      justification?: string,
+    ) => {
+      if (!activeStoryboardId) {
+        return;
+      }
+      await updateSimulationRunStatus({
+        storyboardId: activeStoryboardId,
+        simulationRunId,
+        status,
+        ...(justification ? { justification } : {}),
+      });
+    },
+    [activeStoryboardId, updateSimulationRunStatus],
+  );
+
   const handleDetectContradictions = useCallback(async () => {
     if (!activeStoryboardId) {
       return;
@@ -1096,6 +1362,30 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       rollingSummary,
     });
   }, [activeStoryboardId, detectContradictions, nodes]);
+
+  const handleResolveViolation = useCallback(
+    async (violationId: string, status: "acknowledged" | "resolved") => {
+      if (!activeStoryboardId) return;
+      await resolveViolationMutation({
+        storyboardId: activeStoryboardId,
+        violationId,
+        status,
+      });
+    },
+    [activeStoryboardId, resolveViolationMutation],
+  );
+
+  const handlePublishIdentityPack = useCallback(
+    async (packId: string, publish: boolean) => {
+      if (!activeStoryboardId) return;
+      await publishIdentityPackMutation({
+        storyboardId: activeStoryboardId,
+        packId,
+        publish,
+      });
+    },
+    [activeStoryboardId, publishIdentityPackMutation],
+  );
 
   const handleCreateBranch = useCallback(async () => {
     if (!activeStoryboardId) {
@@ -1496,6 +1786,8 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             onPaneClick={onPaneClick}
             onNodeDragStop={onNodeDragStop}
             onInit={setRfInstance}
+            defaultViewport={defaultViewport}
+            onMoveEnd={handleViewportMoveEnd}
           />
 
           <CanvasToolbar
@@ -1505,6 +1797,10 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             onZoomIn={handleZoomIn}
             onZoomOut={handleZoomOut}
             hasSelection={Boolean(selectedNode)}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={undoDepth > 0}
+            canRedo={redoDepth > 0}
           />
 
           <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
@@ -1538,11 +1834,14 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               onUpdateMember={handleUpdateTeamMember}
               onGenerateDailies={handleGenerateDailies}
               onUpdateDailiesStatus={handleUpdateDailiesStatus}
+              onUpdateSimulationRunStatus={handleUpdateSimulationRunStatus}
               onRunCritic={handleRunSimulationCritic}
               onCreateBranch={handleCreateBranch}
               onCherryPickLatest={handleCherryPickLatest}
               onComputeLatestDiff={handleComputeLatestDiff}
               onDetectContradictions={handleDetectContradictions}
+              onResolveViolation={handleResolveViolation}
+              onPublishIdentityPack={handlePublishIdentityPack}
             />
           </div>
 
@@ -1572,6 +1871,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         approvals={snapshot?.approvals ?? EMPTY_APPROVALS}
         mode={storyboardMode}
         runtimeResolvedTeam={runtimeTeam ?? null}
+        userIdentity={userIdentity}
       />
     </div>
   );

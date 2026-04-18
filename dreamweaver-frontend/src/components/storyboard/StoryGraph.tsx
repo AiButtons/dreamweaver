@@ -9,7 +9,9 @@ import ReactFlow, {
   NodeMouseHandler,
   NodeDragHandler,
   NodeTypes,
-  ReactFlowInstance
+  ReactFlowInstance,
+  Viewport,
+  OnMove,
 } from 'reactflow';
 import CustomNode from './CustomNode';
 import { StoryNode, StoryEdge } from '@/app/storyboard/types';
@@ -24,6 +26,8 @@ interface StoryGraphProps {
   onPaneClick: () => void;
   onNodeDragStop?: NodeDragHandler;
   onInit?: (instance: ReactFlowInstance) => void;
+  defaultViewport?: Viewport;
+  onMoveEnd?: OnMove;
 }
 
 const nodeTypes: NodeTypes = {
@@ -39,7 +43,9 @@ const StoryGraph: React.FC<StoryGraphProps> = ({
   onNodeClick,
   onPaneClick,
   onNodeDragStop,
-  onInit
+  onInit,
+  defaultViewport,
+  onMoveEnd,
 }) => {
   return (
     <div className="w-full h-full bg-[radial-gradient(circle_at_18%_12%,rgba(148,163,184,0.16),transparent_36%),radial-gradient(circle_at_88%_85%,rgba(30,64,175,0.14),transparent_40%),linear-gradient(180deg,#1a2330_0%,#141d2a_55%,#101827_100%)]">
@@ -54,7 +60,9 @@ const StoryGraph: React.FC<StoryGraphProps> = ({
         onPaneClick={onPaneClick}
         onNodeDragStop={onNodeDragStop}
         onInit={onInit}
-        fitView
+        onMoveEnd={onMoveEnd}
+        defaultViewport={defaultViewport}
+        fitView={!defaultViewport}
         minZoom={0.1}
         maxZoom={2}
         className="bg-transparent"

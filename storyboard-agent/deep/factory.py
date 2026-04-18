@@ -24,7 +24,7 @@ from deepagents import create_deep_agent
 
 from .subagents import get_subagents
 from .tools import (
-    ALL_TOOLS,
+    SUPERVISOR_CORE_TOOLS,
     approve_batch_ops,
     approve_dailies_batch,
     approve_execution_plan,
@@ -171,17 +171,52 @@ def create_storyboard_deep_agent_graph(
     checkpointer = _resolve_checkpointer()
     store = InMemoryStore()
     allowlist = tool_allowlist or []
-    filtered_tools = filter_tools_by_allowlist(ALL_TOOLS, allowlist)
+
+    # The supervisor is initialized with a narrow, orchestration-focused tool
+    # set (`SUPERVISOR_CORE_TOOLS`), then further intersected with the runtime
+    # allowlist. This is the init-time allowlist posture: specialized work
+    # (graph patches, media prompts, team mutations, dailies batches, repair
+    # plans) is NEVER directly callable by the supervisor — it must delegate
+    # via `task()` to the appropriate subagent. Previously the supervisor
+    # received ALL_TOOLS by default, which let it bypass the subagent
+    # delegation pattern entirely.
+    filtered_tools = filter_tools_by_allowlist(SUPERVISOR_CORE_TOOLS, allowlist)
     if len(filtered_tools) == 0:
-        filtered_tools = ALL_TOOLS
+        # If the runtime allowlist is so restrictive that zero supervisor core
+        # tools survive, fall back to producer_guard alone so the graph can
+        # still be built and emit a `blocked` payload via the router's policy
+        # guard. An empty tools list would crash create_deep_agent.
+        from .tools import producer_guard as _producer_guard
+        filtered_tools = [_producer_guard]
+
+    subagents = get_subagents(
+        enabled_member_names=enabled_member_names,
+        tool_allowlist=allowlist,
+    )
+
+    # One INFO-level line capturing the effective init-time scope. This is the
+    # audit trail for "what could the agent actually do this invocation".
+    effective_scope = allowlist if len(allowlist) > 0 else ["<default>"]
+    supervisor_tool_names = [str(getattr(t, "name", "<unknown>")) for t in filtered_tools]
+    subagent_summaries = [
+        (
+            str(definition.get("name", "<unknown>")),
+            [str(getattr(t, "name", "<unknown>")) for t in definition.get("tools", [])],
+        )
+        for definition in subagents
+    ]
+    _logger.info(
+        "Storyboard deep agent init | members=%s | allowlist=%s | supervisor_tools=%s | subagents=%s",
+        sorted(enabled_member_names) if enabled_member_names else "<all>",
+        effective_scope,
+        supervisor_tool_names,
+        subagent_summaries,
+    )
 
     kwargs: Dict[str, Any] = {
         "model": model_name,
         "tools": filtered_tools,
-        "subagents": get_subagents(
-            enabled_member_names=enabled_member_names,
-            tool_allowlist=allowlist,
-        ),
+        "subagents": subagents,
         "checkpointer": checkpointer,
         "store": store,
         "interrupt_on": _interrupt_config(),
@@ -189,6 +224,9 @@ def create_storyboard_deep_agent_graph(
         "system_prompt": (
             "You are Storyboard Supervisor V2. Use write_todos to decompose tasks, delegate specialized work "
             "with task to subagents, and never apply mutations without approval tools. "
+            "Your direct tool set is intentionally narrow (orchestration + HITL approval gates); "
+            "planning, media prompting, team management, dailies, and repair work MUST be delegated to the "
+            "corresponding subagent via `task`. "
             "For autonomous dailies, prefer building batch plans with explicit sourceId and taskType. "
             "For simulation critic loops, emit repair batches with deterministic risk metadata. "
             "If team_config/runtime_policy/effective_tool_scope are present in state, treat them as hard constraints "

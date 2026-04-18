@@ -72,10 +72,15 @@ type AdapterDependencies = {
   edges: StoryEdge[];
   createApprovalTask: MutationExecutor;
   resolveApprovalTask: MutationExecutor;
+  markApprovalExecutionStarted?: MutationExecutor;
+  markApprovalExecutionFinished?: MutationExecutor;
   applyGraphPatch: MutationExecutor;
   recordStoryEvent: MutationExecutor;
   refreshNodeHistoryContexts: MutationExecutor;
   createMediaAsset: MutationExecutor;
+  // Optional compensation mutation for partial-batch media rollback. If not
+  // provided, the adapter falls back to graph-only rollback (legacy behavior).
+  revertBatchMediaAssets?: MutationExecutor;
   compileNodePromptPack: MutationExecutor;
   simulateExecutionPlan: MutationExecutor;
   commitPlanOps: MutationExecutor;
@@ -1146,6 +1151,11 @@ type MediaPlanExecutionResult = {
   nodeId: string;
   mediaType: "image" | "video";
   mediaUrl: string;
+  // ID of the inserted mediaAssets row — used for compensation if a later op
+  // in the batch fails and earlier successes need to be rolled back. Typed as
+  // `string` for the adapter layer; Convex returns `Id<"mediaAssets">` which
+  // serializes to a string.
+  mediaAssetId: string;
   success: boolean;
 };
 
@@ -1291,7 +1301,7 @@ const executeMediaPlanOperation = async (
         )
       : {};
 
-  await deps.createMediaAsset({
+  const mediaAssetId = (await deps.createMediaAsset({
     storyboardId: deps.storyboardId,
     nodeId: parsed.nodeId,
     kind: parsed.mediaType,
@@ -1303,7 +1313,7 @@ const executeMediaPlanOperation = async (
     identityScore: consistency.identityScore,
     consistencyScore: consistency.consistencyScore,
     wardrobeCompliance: consistency.wardrobeCompliance,
-  });
+  })) as string;
 
   await deps.recordStoryEvent({
     storyboardId: deps.storyboardId,
@@ -1319,6 +1329,7 @@ const executeMediaPlanOperation = async (
     nodeId: parsed.nodeId,
     mediaType: parsed.mediaType,
     mediaUrl,
+    mediaAssetId,
     success: true,
   };
 };
@@ -1449,6 +1460,10 @@ export const executeApprovedExecutionPlan = async (
         }),
       });
 
+      if (deps.markApprovalExecutionStarted) {
+        await deps.markApprovalExecutionStarted({ taskId });
+      }
+
       let commit:
         | {
           commitId: string;
@@ -1475,13 +1490,22 @@ export const executeApprovedExecutionPlan = async (
       }
 
       const mediaResults: MediaPlanExecutionResult[] = [];
-      let rollbackResult: { performed: boolean; rolledBackTo?: string } = { performed: false };
+      let rollbackResult: {
+        performed: boolean;
+        rolledBackTo?: string;
+        mediaReverted?: number;
+        mediaSkipped?: number;
+      } = { performed: false };
       try {
         for (const operation of mediaOperations) {
           const result = await executeMediaPlanOperation(deps, operation);
           mediaResults.push(result);
         }
       } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown media error";
+
+        // Roll back the graph commit if one was made.
         if (commit?.previousHeadCommitId) {
           await deps.rollbackToCommit({
             storyboardId: deps.storyboardId,
@@ -1489,12 +1513,74 @@ export const executeApprovedExecutionPlan = async (
             commitId: commit.previousHeadCommitId,
             approvalToken: `approved:${taskId}`,
           });
-          rollbackResult = { performed: true, rolledBackTo: commit.previousHeadCommitId };
+          rollbackResult = {
+            ...rollbackResult,
+            performed: true,
+            rolledBackTo: commit.previousHeadCommitId,
+          };
+        }
+
+        // Compensate earlier media successes: mark their mediaAssets rows
+        // "rolled_back" and strip them from the affected nodes' active media
+        // arrays. Compensation is best-effort — if it fails we still surface
+        // the original batch error, but include the compensation error under
+        // `compensationError` so the reviewer sees both.
+        let compensationError: string | undefined;
+        if (deps.revertBatchMediaAssets && mediaResults.length > 0) {
+          const assetIds = mediaResults
+            .map((row) => row.mediaAssetId)
+            .filter((id): id is string => typeof id === "string" && id.length > 0);
+          if (assetIds.length > 0) {
+            try {
+              const revertResult = (await deps.revertBatchMediaAssets({
+                storyboardId: deps.storyboardId,
+                mediaAssetIds: assetIds,
+                reason: `Batch partial failure: ${errorMessage}`,
+              })) as { reverted: number; skipped: number };
+              rollbackResult = {
+                ...rollbackResult,
+                performed: true,
+                mediaReverted: revertResult.reverted,
+                mediaSkipped: revertResult.skipped,
+              };
+            } catch (compErr) {
+              compensationError =
+                compErr instanceof Error ? compErr.message : "Media compensation failed";
+            }
+          }
+        }
+
+        if (deps.markApprovalExecutionFinished) {
+          await deps.markApprovalExecutionFinished({
+            taskId,
+            failed: true,
+            resultJson: JSON.stringify({
+              planId: input.planId,
+              branchId: commit?.branchId ?? branchId,
+              commitId: commit?.commitId,
+              graphOperationCount: graphOperations.length,
+              mediaOperationCount: mediaOperations.length,
+              mediaSuccessCount: mediaResults.length,
+              mediaFailureCount: mediaOperations.length - mediaResults.length,
+              rollback: rollbackResult,
+              error: errorMessage,
+              ...(compensationError ? { compensationError } : {}),
+            }),
+          });
+        }
+
+        const suffixParts: string[] = [];
+        if (rollbackResult.rolledBackTo) suffixParts.push("graph commit rolled back");
+        if ((rollbackResult.mediaReverted ?? 0) > 0) {
+          suffixParts.push(`${rollbackResult.mediaReverted} media asset(s) reverted`);
+        }
+        if (compensationError) {
+          suffixParts.push(`compensation error: ${compensationError}`);
         }
         throw new Error(
-          `Batch execution failed on media operation: ${
-            error instanceof Error ? error.message : "Unknown media error"
-          }${rollbackResult.performed ? " (graph commit rolled back)" : ""}`,
+          `Batch execution failed on media operation: ${errorMessage}${
+            suffixParts.length > 0 ? ` (${suffixParts.join("; ")})` : ""
+          }`,
         );
       }
 
@@ -1532,7 +1618,7 @@ export const executeApprovedExecutionPlan = async (
         });
       }
 
-      return {
+      const finalResult = {
         taskId,
         runId,
         planId: input.planId,
@@ -1553,6 +1639,25 @@ export const executeApprovedExecutionPlan = async (
           quotaSnapshot,
         ),
       };
+
+      if (deps.markApprovalExecutionFinished) {
+        await deps.markApprovalExecutionFinished({
+          taskId,
+          resultJson: JSON.stringify({
+            planId: finalResult.planId,
+            branchId: finalResult.branchId,
+            commitId: finalResult.commitId,
+            operationCount: finalResult.operationCount,
+            graphOperationCount: finalResult.graphOperationCount,
+            mediaOperationCount: finalResult.mediaOperationCount,
+            mediaSuccessCount: finalResult.mediaSuccessCount,
+            mediaFailureCount: finalResult.mediaFailureCount,
+            rollback: finalResult.rollback,
+          }),
+        });
+      }
+
+      return finalResult;
     },
     {
       requestedMutationOps: graphOperations.length,

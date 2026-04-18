@@ -278,6 +278,110 @@ export const sweepStaleMediaGenerations = mutation({
   },
 });
 
+/**
+ * Compensation for partial batch failures in `executeApprovedExecutionPlan`:
+ * given a set of mediaAsset IDs that were created by earlier successful ops in
+ * a batch which subsequently failed, flip each row to `"rolled_back"` and
+ * remove it from its node's active media arrays. Preserves the row + prompt
+ * for audit so reviewers can see what was generated and then reverted.
+ *
+ * Idempotent: rows already in `rolled_back`/`failed` are skipped. Rows still
+ * `pending` are fast-forwarded to `rolled_back` (a concurrent complete call
+ * that races this will short-circuit because it checks `status === "pending"`
+ * before patching the node).
+ */
+export const revertBatchMediaAssets = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    mediaAssetIds: v.array(v.id("mediaAssets")),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const now = Date.now();
+    const reason = args.reason?.slice(0, 500);
+
+    // Build a set for O(1) lookup when cleaning each node's media arrays.
+    const rollbackSet = new Set<string>(args.mediaAssetIds.map((id) => String(id)));
+
+    // Track which nodes need patching. We may encounter the same node
+    // multiple times (one batch can touch the same node multiple ops, though
+    // unusual) so dedupe by nodeId.
+    const touchedNodeIds = new Set<string>();
+    let reverted = 0;
+    let skipped = 0;
+
+    for (const assetId of args.mediaAssetIds) {
+      const asset = await ctx.db.get(assetId);
+      if (!asset) {
+        skipped += 1;
+        continue;
+      }
+      if (asset.storyboardId !== args.storyboardId) {
+        // Wrong storyboard: caller error, but fail soft rather than abort
+        // mid-loop and leave some assets compensated and others not.
+        skipped += 1;
+        continue;
+      }
+      if (asset.status === "rolled_back" || asset.status === "failed") {
+        skipped += 1;
+        continue;
+      }
+      await ctx.db.patch(assetId, {
+        status: "rolled_back",
+        metadata: {
+          ...(asset.metadata ?? {}),
+          ...(reason ? { rollbackReason: reason } : {}),
+          rolledBackAt: String(now),
+        },
+        updatedAt: now,
+      });
+      touchedNodeIds.add(asset.nodeId);
+      reverted += 1;
+    }
+
+    // Strip the reverted assets out of each affected node's media arrays and
+    // clear activeImageId/activeVideoId if they point at a rolled-back asset.
+    for (const nodeId of touchedNodeIds) {
+      const node = await ctx.db
+        .query("storyboardNodes")
+        .withIndex("by_storyboard_node", (q) =>
+          q.eq("storyboardId", args.storyboardId).eq("nodeId", nodeId),
+        )
+        .unique();
+      if (!node) continue;
+      const nextImages = node.media.images.filter(
+        (entry) => !rollbackSet.has(String(entry.mediaAssetId)),
+      );
+      const nextVideos = node.media.videos.filter(
+        (entry) => !rollbackSet.has(String(entry.mediaAssetId)),
+      );
+      const nextActiveImage =
+        node.media.activeImageId && rollbackSet.has(String(node.media.activeImageId))
+          ? nextImages[nextImages.length - 1]?.mediaAssetId
+          : node.media.activeImageId;
+      const nextActiveVideo =
+        node.media.activeVideoId && rollbackSet.has(String(node.media.activeVideoId))
+          ? nextVideos[nextVideos.length - 1]?.mediaAssetId
+          : node.media.activeVideoId;
+      await ctx.db.patch(node._id, {
+        media: {
+          images: nextImages,
+          videos: nextVideos,
+          activeImageId: nextActiveImage,
+          activeVideoId: nextActiveVideo,
+        },
+        updatedAt: now,
+      });
+    }
+
+    await recomputeStoryboardStatsInternal(ctx, args.storyboardId);
+
+    return { reverted, skipped };
+  },
+});
+
 export const setActiveMediaVariant = mutation({
   args: {
     storyboardId: v.id("storyboards"),
