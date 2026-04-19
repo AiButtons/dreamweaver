@@ -118,17 +118,24 @@ def _sse_format(event_type: str, payload: Any) -> bytes:
     return f"event: {event_type}\ndata: {body}\n\n".encode("utf-8")
 
 
+HEARTBEAT_INTERVAL_SECONDS = 15.0
+
+
 async def _run_with_event_stream(
     coroutine_factory,
 ) -> AsyncIterator[bytes]:
     """Turn a coordinator + event_emitter callback into an SSE byte stream.
 
     The coordinator runs in a background task; the callback enqueues events
-    into an asyncio.Queue which this generator drains and formats. When the
-    coordinator finishes, we emit a final `result` event with its return
-    value (or `error` on exception) and close the stream.
+    into an asyncio.Queue which this generator drains and formats. While
+    the queue is idle, we emit `event: ping` frames every
+    HEARTBEAT_INTERVAL_SECONDS so intermediate proxies don't close the
+    connection on long stages (design_storyboard can take 30+ seconds).
     """
+    import time as _time
+
     queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    started = _time.time()
 
     async def emitter(stage: str, percent: float, message: str, extra: dict) -> None:
         await queue.put(
@@ -146,12 +153,12 @@ async def _run_with_event_stream(
     async def runner() -> None:
         try:
             result = await coroutine_factory(emitter)
-            # Pydantic model → dict, excluding None values so the final
-            # payload matches the non-streaming shape.
             await queue.put(
                 (
                     "result",
-                    result.model_dump(exclude_none=True) if hasattr(result, "model_dump") else result,
+                    result.model_dump(exclude_none=True)
+                    if hasattr(result, "model_dump")
+                    else result,
                 )
             )
         except Exception as exc:
@@ -161,11 +168,19 @@ async def _run_with_event_stream(
 
     task = asyncio.create_task(runner())
     try:
-        # Eager open: emit a heartbeat immediately so the client's stream
-        # unblocks and the progress bar starts rendering.
         yield _sse_format("open", {"ok": True})
         while True:
-            event_type, payload = await queue.get()
+            try:
+                event_type, payload = await asyncio.wait_for(
+                    queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                # No coordinator events in the last interval — emit a
+                # heartbeat so idle proxies keep the connection open.
+                yield _sse_format(
+                    "ping", {"elapsedMs": int((_time.time() - started) * 1000)}
+                )
+                continue
             if event_type == "__done__":
                 break
             yield _sse_format(event_type, payload)

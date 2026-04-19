@@ -1,115 +1,78 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import { Clapperboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useShotBatchStream, type ShotBatchPhase } from "@/lib/sse-ingest";
 
 interface GenerateAllShotsButtonProps {
   storyboardId: string;
   disabled?: boolean;
 }
 
-type BatchStatus =
-  | { kind: "idle" }
-  | { kind: "running"; startedAt: number }
-  | {
-      kind: "done";
-      total: number;
-      succeeded: number;
-      failed: number;
-      skipped: number;
-      durationMs: number;
-    }
-  | { kind: "error"; message: string };
+const PHASE_CLASS: Record<ShotBatchPhase, string> = {
+  queued: "bg-muted/40 border-border/40",
+  running: "bg-sky-500/40 border-sky-500 animate-pulse",
+  succeeded: "bg-emerald-500/60 border-emerald-500",
+  failed: "bg-rose-500/60 border-rose-500",
+  skipped: "bg-slate-500/40 border-slate-500/60",
+};
 
-interface BatchResponse {
-  storyboardId: string;
-  total: number;
-  succeeded: number;
-  failed: number;
-  skipped: number;
-  durationMs: number;
-}
-
-/** Fires POST /api/storyboard/generate-shots and surfaces per-run stats. */
 export function GenerateAllShotsButton({
   storyboardId,
   disabled,
 }: GenerateAllShotsButtonProps) {
-  const [status, setStatus] = useState<BatchStatus>({ kind: "idle" });
-  const [elapsed, setElapsed] = useState(0);
-
-  React.useEffect(() => {
-    if (status.kind !== "running") {
-      setElapsed(0);
-      return;
-    }
-    const started = status.startedAt;
-    const tick = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - started) / 1000));
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [status]);
+  const { state, start } = useShotBatchStream();
 
   const run = async () => {
     if (!storyboardId) return;
-    setStatus({ kind: "running", startedAt: Date.now() });
-    try {
-      const res = await fetch("/api/storyboard/generate-shots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storyboardId, skipExisting: true, concurrency: 3 }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        let msg = `Batch failed (${res.status})`;
-        try {
-          const parsed = JSON.parse(text) as { error?: string };
-          if (parsed.error) msg = parsed.error;
-        } catch {
-          if (text) msg = text.slice(0, 300);
-        }
-        setStatus({ kind: "error", message: msg });
-        return;
-      }
-      const data = (await res.json()) as BatchResponse;
-      setStatus({
-        kind: "done",
-        total: data.total,
-        succeeded: data.succeeded,
-        failed: data.failed,
-        skipped: data.skipped,
-        durationMs: data.durationMs,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Network error";
-      setStatus({ kind: "error", message: msg });
-    }
+    await start({ storyboardId, skipExisting: true, concurrency: 3 });
   };
 
-  const isBusy = status.kind === "running";
+  const isBusy = state.kind === "running";
   const isDisabled = disabled || !storyboardId || isBusy;
+
+  const elapsedSec = Math.floor(state.elapsedMs / 1000);
+  const doneCount = state.counts.succeeded + state.counts.failed + state.counts.skipped;
 
   return (
     <div className="flex items-center gap-2">
-      {status.kind === "done" ? (
+      {state.kind !== "idle" && state.total > 0 ? (
         <div
-          className={
-            "rounded-md border px-2 py-1 text-[11px] " +
-            (status.failed > 0
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200")
+          className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px]"
+          title={
+            state.kind === "done"
+              ? `${state.counts.succeeded}/${state.total} generated · ${state.counts.failed} failed · ${state.counts.skipped} skipped · ${Math.round((state.done?.durationMs ?? state.elapsedMs) / 100) / 10}s`
+              : `${doneCount}/${state.total} shots · ${elapsedSec}s elapsed`
           }
-          title={`${status.succeeded}/${status.total} generated, ${status.failed} failed, ${status.skipped} skipped — ${Math.round(status.durationMs / 100) / 10}s`}
         >
-          {status.succeeded} / {status.total} shots
-          {status.failed > 0 ? ` · ${status.failed} failed` : ""}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-0.5">
+              {state.rows.slice(0, 20).map((row) => (
+                <span
+                  key={row.index}
+                  className={`block size-2 rounded-sm border ${PHASE_CLASS[row.phase]}`}
+                  title={`Shot ${row.index + 1}: ${row.phase}${row.error ? ` — ${row.error}` : ""}${row.reason ? ` — ${row.reason}` : ""}`}
+                />
+              ))}
+              {state.rows.length > 20 ? (
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  +{state.rows.length - 20}
+                </span>
+              ) : null}
+            </div>
+            <span className="tabular-nums text-muted-foreground">
+              {state.kind === "done"
+                ? `${state.counts.succeeded}/${state.total}`
+                : `${doneCount}/${state.total}`}
+            </span>
+          </div>
         </div>
       ) : null}
-      {status.kind === "error" ? (
+      {state.kind === "error" ? (
         <div
           className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200"
-          title={status.message}
+          title={state.error}
         >
           Batch error
         </div>
@@ -124,14 +87,14 @@ export function GenerateAllShotsButton({
         aria-label="Generate images for every shot"
         title={
           isBusy
-            ? `Generating… ${elapsed}s elapsed`
+            ? `Generating… ${elapsedSec}s elapsed`
             : "Generate images for every shot using linked character portraits as references"
         }
       >
         {isBusy ? (
           <>
             <span className="size-3 animate-spin rounded-full border-2 border-current/30 border-t-current" />
-            Generating… {elapsed}s
+            Generating… {elapsedSec}s
           </>
         ) : (
           <>
