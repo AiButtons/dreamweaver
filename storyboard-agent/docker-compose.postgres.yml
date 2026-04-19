@@ -1,0 +1,42 @@
+# Local Postgres for LangGraph checkpointer persistence.
+#
+# When STORYBOARD_CHECKPOINT_POSTGRES_URI is set (see below), the
+# storyboard-agent factory uses `langgraph.checkpoint.postgres.PostgresSaver`
+# so in-flight approval workflows survive langgraph-dev restarts. Without
+# this service the factory falls back to MemorySaver and every approval is
+# lost when the server reloads.
+#
+# Usage:
+#   docker compose -f docker-compose.postgres.yml up -d
+#   export STORYBOARD_CHECKPOINT_POSTGRES_URI=postgresql://storyboard:storyboard@localhost:5433/storyboard_checkpoints
+#   export STORYBOARD_CHECKPOINT_POSTGRES_MAX_CONN=10
+#
+# Port 5433 is used (not 5432) so the container doesn't collide with any
+# Postgres a developer has running natively.
+
+version: "3.9"
+
+services:
+  storyboard-checkpoints:
+    image: postgres:16-alpine
+    container_name: storyboard-checkpoints
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: storyboard
+      POSTGRES_PASSWORD: storyboard
+      POSTGRES_DB: storyboard_checkpoints
+      # Keep WAL small for dev; production deployments should override.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5433:5432"
+    volumes:
+      - storyboard_checkpoints_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storyboard -d storyboard_checkpoints"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  storyboard_checkpoints_data:
+    name: storyboard_checkpoints_data

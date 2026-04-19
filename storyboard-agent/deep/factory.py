@@ -4,6 +4,7 @@ Factory for V2 deep-agent graph creation.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import threading
@@ -19,6 +20,10 @@ _logger = logging.getLogger(__name__)
 # across graph invocations instead of being rebuilt per thread.
 _checkpointer_lock = threading.Lock()
 _checkpointer_singleton: Optional[Any] = None
+# Separate handle to the psycopg pool so `close_checkpointer()` (called on
+# process exit) can release Postgres connections cleanly. MemorySaver has
+# nothing to close, so we only track the pool when PostgresSaver is active.
+_checkpointer_pool: Optional[Any] = None
 
 from deepagents import create_deep_agent
 
@@ -104,6 +109,10 @@ def _build_checkpointer() -> Any:
         )
         saver = PostgresSaver(pool)
         saver.setup()
+        # Stash the pool so the atexit hook can close it; the saver itself
+        # doesn't expose .close() so we hold the handle separately.
+        global _checkpointer_pool
+        _checkpointer_pool = pool
         _logger.info(
             "PostgresSaver checkpointer initialized (pool max_size=%d).", max_conn
         )
@@ -115,6 +124,31 @@ def _build_checkpointer() -> Any:
             exc,
         )
         return MemorySaver()
+
+
+def close_checkpointer() -> None:
+    """Closes the Postgres pool if one is open. Called via an atexit hook
+    so langgraph-dev / production workers release connections on shutdown
+    instead of leaving the pool in an orphaned state.
+
+    Safe to call multiple times — the pool's `.close()` is idempotent.
+    Safe to call when the checkpointer is in MemorySaver mode (no-op).
+    """
+    global _checkpointer_pool
+    pool = _checkpointer_pool
+    if pool is None:
+        return
+    _checkpointer_pool = None
+    try:
+        pool.close()
+    except Exception as exc:  # best-effort — shutting down anyway
+        _logger.warning("checkpointer pool close failed: %s", exc)
+
+
+# Register the shutdown hook once at import time; idempotent because
+# atexit.register is a no-op if the same callable is registered twice
+# (well, it re-registers but close_checkpointer is itself idempotent).
+atexit.register(close_checkpointer)
 
 
 def _resolve_checkpointer() -> Any:
