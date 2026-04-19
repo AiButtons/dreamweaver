@@ -19,7 +19,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt
 
-from ._vimax_types import CharacterInScene, ShotBriefDescription, ShotDescription
+from ._vimax_types import (
+    CharacterFacing,
+    CharacterInScene,
+    ShotBriefDescription,
+    ShotDescription,
+)
 
 
 def _after_func(retry_state) -> None:
@@ -102,8 +107,20 @@ Additionally, you will receive a sequence of potential characters, each containi
 
 [Output]
 Return a JSON object matching the provided schema with fields `ff_desc`,
-`ff_vis_char_idxs`, `lf_desc`, `lf_vis_char_idxs`, `motion_desc`,
-`variation_type` ("large" | "medium" | "small"), and `variation_reason`.
+`ff_vis_char_idxs`, `ff_char_facings`, `lf_desc`, `lf_vis_char_idxs`,
+`motion_desc`, `variation_type` ("large" | "medium" | "small"), and
+`variation_reason`.
+
+`ff_char_facings` is a parallel list to `ff_vis_char_idxs` — same length, same
+order. Each entry names the facing direction of the corresponding character
+in the first frame:
+  * "toward_camera" — facing the lens directly.
+  * "away_from_camera" — showing their back to the camera.
+  * "screen_left" — strict profile facing screen-left.
+  * "screen_right" — strict profile facing screen-right.
+  * "three_quarter_left" — angled partway between front and screen-left.
+  * "three_quarter_right" — angled partway between front and screen-right.
+  * "unknown" — only when the description is genuinely ambiguous.
 
 [Guidelines]
 - Ensure all output values (except keys) match the language used in the script.
@@ -141,6 +158,13 @@ class VisDescDecompositionResponse(BaseModel):
     )
     ff_vis_char_idxs: List[int] = Field(
         description="Indices of characters visible in the first frame.",
+    )
+    ff_char_facings: List[CharacterFacing] = Field(
+        description=(
+            "Facing direction for each character in ff_vis_char_idxs, in the "
+            "same order and with the same length. Use 'unknown' only when the "
+            "description is genuinely ambiguous."
+        ),
     )
     lf_desc: str = Field(
         description="A detailed description of the last frame of the shot.",
@@ -242,6 +266,17 @@ class StoryboardArtist:
             timeout=retry_timeout,
         )
 
+        # Defensive length alignment: if the LLM emits a facings list that
+        # doesn't match ff_vis_char_idxs (shouldn't happen under strict JSON
+        # schema, but belt-and-suspenders), truncate or pad with "unknown"
+        # so downstream consumers never see a parallel-array mismatch.
+        aligned_facings: List[CharacterFacing] = list(decomposition.ff_char_facings)
+        expected = len(decomposition.ff_vis_char_idxs)
+        if len(aligned_facings) > expected:
+            aligned_facings = aligned_facings[:expected]
+        while len(aligned_facings) < expected:
+            aligned_facings.append("unknown")
+
         return ShotDescription(
             idx=shot_brief_desc.idx,
             is_last=shot_brief_desc.is_last,
@@ -251,6 +286,7 @@ class StoryboardArtist:
             variation_reason=decomposition.variation_reason,
             ff_desc=decomposition.ff_desc,
             ff_vis_char_idxs=decomposition.ff_vis_char_idxs,
+            ff_char_facings=aligned_facings,
             lf_desc=decomposition.lf_desc,
             lf_vis_char_idxs=decomposition.lf_vis_char_idxs,
             motion_desc=decomposition.motion_desc,

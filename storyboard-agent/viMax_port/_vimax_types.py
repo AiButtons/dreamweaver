@@ -77,6 +77,21 @@ class ShotBriefDescription(BaseModel):
     )
 
 
+# Per-character facing direction in the first frame. Consumed by the M3 #5
+# smart shot-batch selector to pick the portrait view whose angle matches the
+# character's in-shot facing. "unknown" is a valid value when the LLM can't
+# tell — the selector falls back to shot-size + screenDirection heuristics.
+CharacterFacing = Literal[
+    "toward_camera",
+    "away_from_camera",
+    "screen_left",
+    "screen_right",
+    "three_quarter_left",
+    "three_quarter_right",
+    "unknown",
+]
+
+
 class ShotDescription(BaseModel):
     idx: int = Field(
         description="The index of the shot in the sequence, starting from 0."
@@ -102,6 +117,19 @@ class ShotDescription(BaseModel):
     ff_vis_char_idxs: List[int] = Field(
         default_factory=list,
         description="The indices of characters visible in the first frame.",
+    )
+    # Parallel array to ff_vis_char_idxs — same length, same order. Each entry
+    # names the facing direction of the visible character in the first frame.
+    ff_char_facings: List[CharacterFacing] = Field(
+        default_factory=list,
+        description=(
+            "The facing direction of each character in ff_vis_char_idxs, in the "
+            "same order. Use 'toward_camera' when the character faces the lens, "
+            "'away_from_camera' when showing their back, 'screen_left' / "
+            "'screen_right' for strict profile shots, 'three_quarter_left' / "
+            "'three_quarter_right' for angled views, and 'unknown' only if the "
+            "facing is genuinely ambiguous."
+        ),
     )
     lf_desc: str = Field(
         description="The last frame of the shot.",

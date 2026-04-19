@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
   cheapDnaFromCharacter,
+  flattenCharacterFacings,
   portraitKey,
   sseFrame,
   stripNulls,
 } from "@/lib/ingest-postprocess/utils";
+import type { CharacterFacing } from "@/lib/ingest-postprocess";
 
 describe("stripNulls", () => {
   it("returns primitives unchanged", () => {
@@ -102,5 +104,66 @@ describe("sseFrame", () => {
     expect(sseFrame("done", { counts: [1, 2] })).toBe(
       `event: done\ndata: {"counts":[1,2]}\n\n`,
     );
+  });
+});
+
+// Loose end #4 — Python emits characterFacings as a Record, but Convex's
+// validator is record-free. `flattenCharacterFacings` projects the record
+// into a parallel array while enforcing the shot's character allowlist.
+describe("flattenCharacterFacings", () => {
+  it("flattens record to array entries", () => {
+    const out = flattenCharacterFacings(
+      { ALICE: "toward_camera", BOB: "screen_left" },
+      ["ALICE", "BOB"],
+    );
+    expect(out).toEqual([
+      { characterId: "ALICE", facing: "toward_camera" },
+      { characterId: "BOB", facing: "screen_left" },
+    ]);
+  });
+
+  it("returns undefined for null/undefined input", () => {
+    expect(flattenCharacterFacings(undefined, ["ALICE"])).toBeUndefined();
+    expect(flattenCharacterFacings(null, ["ALICE"])).toBeUndefined();
+  });
+
+  it("drops entries whose characterId is not in the allowlist", () => {
+    const out = flattenCharacterFacings(
+      { ALICE: "toward_camera", EVE: "screen_left" },
+      ["ALICE"],
+    );
+    expect(out).toEqual([{ characterId: "ALICE", facing: "toward_camera" }]);
+  });
+
+  it("drops 'unknown' sentinel values", () => {
+    const out = flattenCharacterFacings(
+      { ALICE: "unknown" as CharacterFacing, BOB: "away_from_camera" },
+      ["ALICE", "BOB"],
+    );
+    expect(out).toEqual([{ characterId: "BOB", facing: "away_from_camera" }]);
+  });
+
+  it("returns undefined when every entry is filtered out", () => {
+    const out = flattenCharacterFacings(
+      { ALICE: "unknown" as CharacterFacing },
+      ["ALICE"],
+    );
+    expect(out).toBeUndefined();
+  });
+
+  it("accepts an empty/missing characterIds allowlist by trusting the record", () => {
+    // When the shot carries no explicit characterIds but the ingester still
+    // wrote facings, we trust the record — useful for debug tooling that
+    // wants to surface facings independently of the resolved character set.
+    const out = flattenCharacterFacings({ ALICE: "toward_camera" }, undefined);
+    expect(out).toEqual([{ characterId: "ALICE", facing: "toward_camera" }]);
+  });
+
+  it("preserves insertion order", () => {
+    const out = flattenCharacterFacings(
+      { A: "toward_camera", B: "screen_left", C: "away_from_camera" },
+      ["A", "B", "C"],
+    );
+    expect(out?.map((e) => e.characterId)).toEqual(["A", "B", "C"]);
   });
 });

@@ -8,7 +8,7 @@ to `bulkCreateNodes` / `bulkCreateEdges` without remapping.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -85,6 +85,21 @@ class IngestedShotNode(BaseModel):
     shotMeta: Optional[ShotMetaOut] = None
     promptPack: Optional[PromptPackOut] = None
     characterIdentifiers: List[str] = Field(default_factory=list)
+    # Per-character facing direction for this shot. Keys are character
+    # identifiers matching `characterIdentifiers`. Values align with the
+    # `CharacterFacing` TypeScript union consumed by the M3 #5 smart shot-
+    # batch selector. Emitted by the storyboard artist's
+    # decompose_visual_description step; undefined when the LLM couldn't
+    # classify the facing (the selector falls back to size + angle +
+    # screenDirection heuristics in that case).
+    characterFacings: Optional[Dict[str, Literal[
+        "toward_camera",
+        "away_from_camera",
+        "screen_left",
+        "screen_right",
+        "three_quarter_left",
+        "three_quarter_right",
+    ]]] = None
 
 
 class IngestedEdge(BaseModel):

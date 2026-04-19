@@ -214,11 +214,22 @@ def shots_and_edges_from_descriptions(
         )
 
         char_ids: List[str] = []
+        facings_by_char: Dict[str, str] = {}
         if decomp:
-            for idx in decomp.ff_vis_char_idxs or []:
+            ff_idxs = decomp.ff_vis_char_idxs or []
+            ff_facings = decomp.ff_char_facings or []
+            for pos, idx in enumerate(ff_idxs):
                 cid = character_lookup_by_idx.get(idx)
-                if cid:
-                    char_ids.append(cid)
+                if not cid:
+                    continue
+                char_ids.append(cid)
+                # Parallel-array alignment: grab the facing at the same
+                # position. "unknown" or out-of-range → drop the entry so
+                # the downstream map stays tight.
+                if pos < len(ff_facings):
+                    facing = ff_facings[pos]
+                    if facing and facing != "unknown":
+                        facings_by_char[cid] = facing
 
         node = IngestedShotNode(
             nodeId=node_id,
@@ -229,6 +240,9 @@ def shots_and_edges_from_descriptions(
             shotMeta=shot_meta,
             promptPack=prompt_pack,
             characterIdentifiers=char_ids,
+            # Only attach when we have at least one known facing; otherwise
+            # leave as None so the TS consumer can skip the field entirely.
+            characterFacings=facings_by_char if facings_by_char else None,
         )
         nodes.append(node)
 

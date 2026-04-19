@@ -128,6 +128,24 @@ export default defineSchema({
       backgroundId: v.optional(v.string()),
       sceneId: v.optional(v.string()),
       shotId: v.optional(v.string()),
+      // Per-character facing direction in this shot's first frame. Emitted
+      // by the ViMax storyboard_artist's decompose_visual_description step
+      // and consumed by the M3 #5 smart shot-batch selector to pick the
+      // portrait view that matches the character's in-shot facing.
+      // Stored as a parallel array so Convex doesn't need record-valued
+      // validators. Each entry's `characterId` must appear in
+      // `characterIds`; facings that aren't known are simply omitted.
+      characterFacings: v.optional(v.array(v.object({
+        characterId: v.string(),
+        facing: v.union(
+          v.literal("toward_camera"),
+          v.literal("away_from_camera"),
+          v.literal("screen_left"),
+          v.literal("screen_right"),
+          v.literal("three_quarter_left"),
+          v.literal("three_quarter_right"),
+        ),
+      }))),
     }),
     continuity: v.object({
       identityLockVersion: v.number(),

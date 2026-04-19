@@ -21,7 +21,12 @@ import type {
   PostProcessOutcome,
   PythonIngestionResult,
 } from "./types";
-import { cheapDnaFromCharacter, portraitKey, stripNulls } from "./utils";
+import {
+  cheapDnaFromCharacter,
+  flattenCharacterFacings,
+  portraitKey,
+  stripNulls,
+} from "./utils";
 
 export interface ProcessIngestionOptions {
   client: ConvexHttpClient;
@@ -211,8 +216,17 @@ export async function processIngestionResult(
   let nodesWritten = 0;
   let edgesWritten = 0;
   if (pythonResult.nodes.length > 0) {
-    const scrubbedNodes = pythonResult.nodes.map((n) =>
-      stripNulls({
+    const scrubbedNodes = pythonResult.nodes.map((n) => {
+      // Python emits `characterFacings` as a Record<characterId, facing>.
+      // Convex's validator is record-free so we flatten to a parallel
+      // array. `flattenCharacterFacings` enforces the allowlist + "unknown"
+      // drop rules; returns `undefined` when nothing survives so the field
+      // is omitted from the payload entirely.
+      const flattenedFacings = flattenCharacterFacings(
+        n.characterFacings ?? undefined,
+        n.characterIdentifiers,
+      );
+      return stripNulls({
         nodeId: n.nodeId,
         nodeType: n.nodeType,
         label: n.label,
@@ -224,8 +238,9 @@ export async function processIngestionResult(
           n.characterIdentifiers && n.characterIdentifiers.length > 0
             ? n.characterIdentifiers
             : undefined,
-      }),
-    );
+        characterFacings: flattenedFacings,
+      });
+    });
     const res = (await client.mutation(mutationRef("storyboards:bulkCreateNodes"), {
       storyboardId: storyboardId as Id<"storyboards">,
       nodes: scrubbedNodes,

@@ -1255,6 +1255,22 @@ export const bulkCreateNodes = mutation({
         // ingester from the storyboard-artist's `ff_vis_char_idxs`. Matched
         // against `identityPacks.sourceCharacterId` for pack resolution.
         characterIds: v.optional(v.array(v.string())),
+        // Per-character facing direction (loose end #4). Written as a
+        // parallel array so the Convex validator stays record-free. Each
+        // entry's characterId should also appear in `characterIds`;
+        // entries that don't are retained on the row but ignored by the
+        // shot-batch selector.
+        characterFacings: v.optional(v.array(v.object({
+          characterId: v.string(),
+          facing: v.union(
+            v.literal("toward_camera"),
+            v.literal("away_from_camera"),
+            v.literal("screen_left"),
+            v.literal("screen_right"),
+            v.literal("three_quarter_left"),
+            v.literal("three_quarter_right"),
+          ),
+        }))),
       }),
     ),
   },
@@ -1310,6 +1326,16 @@ export const bulkCreateNodes = mutation({
           payload.entityRefs = {
             ...base.entityRefs,
             characterIds: n.characterIds,
+            ...(n.characterFacings && n.characterFacings.length > 0
+              ? { characterFacings: n.characterFacings }
+              : {}),
+          };
+        } else if (n.characterFacings && n.characterFacings.length > 0) {
+          // Facings supplied without explicit characterIds — unusual but
+          // harmless; keep the facings so debug surfaces can show them.
+          payload.entityRefs = {
+            ...base.entityRefs,
+            characterFacings: n.characterFacings,
           };
         }
         const id = await ctx.db.insert(
@@ -1329,10 +1355,17 @@ export const bulkCreateNodes = mutation({
                 n.promptPack.continuityDirectives ?? existing.promptPack.continuityDirectives,
             }
           : existing.promptPack;
-        const mergedEntityRefs =
-          n.characterIds && n.characterIds.length > 0
-            ? { ...existing.entityRefs, characterIds: n.characterIds }
-            : existing.entityRefs;
+        const mergedEntityRefs: typeof existing.entityRefs = { ...existing.entityRefs };
+        if (n.characterIds && n.characterIds.length > 0) {
+          mergedEntityRefs.characterIds = n.characterIds;
+        }
+        if (n.characterFacings !== undefined) {
+          // An explicit empty array clears the facings; a non-empty array
+          // replaces the previous value. `undefined` leaves the existing
+          // field intact.
+          mergedEntityRefs.characterFacings =
+            n.characterFacings.length > 0 ? n.characterFacings : undefined;
+        }
         await ctx.db.patch(existing._id, {
           nodeType: n.nodeType,
           label: n.label,

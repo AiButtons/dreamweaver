@@ -23,6 +23,18 @@ export interface PythonIngestedPortrait {
   conditionOnView?: PortraitView | null;
 }
 
+/** Per-character facing direction in a shot's first frame. Emitted by the
+ *  ViMax storyboard_artist and consumed by the M3 #5 smart shot-batch
+ *  selector. Kept in sync with `CharacterFacing` in
+ *  `@/lib/shot-batch/selector`. */
+export type CharacterFacing =
+  | "toward_camera"
+  | "away_from_camera"
+  | "screen_left"
+  | "screen_right"
+  | "three_quarter_left"
+  | "three_quarter_right";
+
 export interface PythonIngestedShotNode {
   nodeId: string;
   nodeType: "scene" | "shot";
@@ -32,6 +44,10 @@ export interface PythonIngestedShotNode {
   shotMeta: Record<string, unknown> | null;
   promptPack: Record<string, unknown> | null;
   characterIdentifiers: string[];
+  /** Optional map from characterId → facing. Omitted / null when the LLM
+   *  couldn't classify facings; the shot-batch selector falls back to
+   *  shot size + angle + screenDirection heuristics. */
+  characterFacings?: Record<string, CharacterFacing> | null;
 }
 
 export interface PythonIngestedEdge {

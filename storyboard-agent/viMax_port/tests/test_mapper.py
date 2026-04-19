@@ -38,7 +38,9 @@ def _make_decomp(
     idx: int,
     variation: str = "medium",
     ff_vis: list | None = None,
+    ff_facings: list | None = None,
 ) -> ShotDescription:
+    ff_vis_list = ff_vis or []
     return ShotDescription(
         idx=idx,
         is_last=False,
@@ -47,7 +49,8 @@ def _make_decomp(
         variation_type=variation,  # type: ignore[arg-type]
         variation_reason="reason",
         ff_desc=f"ff {idx}",
-        ff_vis_char_idxs=ff_vis or [],
+        ff_vis_char_idxs=ff_vis_list,
+        ff_char_facings=ff_facings if ff_facings is not None else ["unknown"] * len(ff_vis_list),
         lf_desc=f"lf {idx}",
         lf_vis_char_idxs=[],
         motion_desc=f"motion {idx}",
@@ -293,3 +296,99 @@ def test_prompt_pack_combines_visual_and_ff():
     assert "Wide park shot." in node.promptPack.imagePrompt
     assert "ff 0" in node.promptPack.imagePrompt
     assert node.promptPack.videoPrompt == "motion 0"
+
+
+# ---------------------------------------------------------------------------
+# Loose end #4 — per-character facing mapping.
+#
+# The storyboard_artist emits a parallel `ff_char_facings` array aligned with
+# `ff_vis_char_idxs`. The mapper must project that into a
+# `characterFacings: Dict[str, str]` on the ingested shot node, so the
+# downstream shot-batch selector can pick portrait views that match each
+# character's in-shot facing.
+# ---------------------------------------------------------------------------
+
+
+def test_mapper_projects_character_facings_dict():
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0, 1],
+            ff_facings=["toward_camera", "screen_left"],
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice", 1: "Bob"},
+    )
+    assert nodes[0].characterFacings == {
+        "Alice": "toward_camera",
+        "Bob": "screen_left",
+    }
+
+
+def test_mapper_skips_unknown_facings():
+    # "unknown" means the LLM couldn't classify — those entries should be
+    # omitted from the characterFacings dict so downstream consumers treat
+    # them as absent rather than reporting a bogus facing.
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0, 1],
+            ff_facings=["unknown", "away_from_camera"],
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice", 1: "Bob"},
+    )
+    assert nodes[0].characterFacings == {"Bob": "away_from_camera"}
+
+
+def test_mapper_returns_none_when_no_known_facings():
+    # Parallel-array mismatches (LLM hallucinating fewer facings than
+    # visible characters) should not populate the field. The mapper emits
+    # None rather than an empty dict so the wire payload skips the key.
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0, 1],
+            ff_facings=["unknown", "unknown"],
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice", 1: "Bob"},
+    )
+    assert nodes[0].characterFacings is None
+
+
+def test_mapper_drops_facings_for_unresolved_character_indices():
+    # When a ff_vis_char_idx doesn't resolve via character_lookup_by_idx,
+    # the character is dropped from characterIdentifiers AND the matching
+    # facing entry at that position is also skipped.
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0, 99],  # 99 is not in the lookup
+            ff_facings=["toward_camera", "screen_right"],
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice"},
+    )
+    assert nodes[0].characterIdentifiers == ["Alice"]
+    assert nodes[0].characterFacings == {"Alice": "toward_camera"}

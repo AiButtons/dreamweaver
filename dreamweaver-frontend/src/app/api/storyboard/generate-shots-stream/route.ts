@@ -24,6 +24,7 @@ import { mutationRef, queryRef } from "@/lib/convexRefs";
 import {
   collectShotReferenceUrls,
   type AvailablePortrait,
+  type CharacterFacing,
   type PortraitView,
 } from "@/lib/shot-batch";
 import { sseFrame } from "@/lib/ingest-postprocess";
@@ -49,7 +50,12 @@ interface SnapshotNode {
   label: string;
   segment: string;
   shotMeta?: ShotMeta;
-  entityRefs?: { characterIds: string[] };
+  entityRefs?: {
+    characterIds: string[];
+    /** Parallel array of per-character facings emitted by the ViMax
+     *  storyboard_artist during ingestion (loose end #4). */
+    characterFacings?: Array<{ characterId: string; facing: CharacterFacing }>;
+  };
   promptPack?: { imagePrompt?: string };
   media?: { activeImageId?: string };
 }
@@ -215,11 +221,25 @@ export async function POST(request: NextRequest): Promise<Response> {
             send("shot_started", { nodeId, index, total });
 
             const characterIds = shot.entityRefs?.characterIds ?? [];
+            // Build facing map from the parallel-array form stored on the
+            // shot row (loose end #4). When absent, the selector falls back
+            // to the shot-size + angle + screenDirection heuristics.
+            let facingByCharacter: Map<string, CharacterFacing> | undefined;
+            const facingEntries = shot.entityRefs?.characterFacings;
+            if (facingEntries && facingEntries.length > 0) {
+              facingByCharacter = new Map<string, CharacterFacing>();
+              for (const entry of facingEntries) {
+                facingByCharacter.set(entry.characterId, entry.facing);
+              }
+            }
             const referenceUrls = collectShotReferenceUrls(
               shot.shotMeta,
               characterIds,
               portraitsByCharacter,
-              MAX_REFERENCE_URLS_PER_SHOT,
+              {
+                maxRefs: MAX_REFERENCE_URLS_PER_SHOT,
+                facingByCharacter,
+              },
             );
 
             let mediaAssetId: Id<"mediaAssets"> | null = null;

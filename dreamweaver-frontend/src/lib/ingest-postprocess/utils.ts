@@ -1,4 +1,4 @@
-import type { PythonIngestedCharacter } from "./types";
+import type { CharacterFacing, PythonIngestedCharacter } from "./types";
 
 /**
  * Recursively replace `null` with `undefined` so Convex `v.optional(...)`
@@ -53,3 +53,33 @@ export const portraitKey = (characterId: string, view: string): string =>
  */
 export const sseFrame = (eventType: string, data: unknown): string =>
   `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+
+/**
+ * Flatten the Python-emitted `characterFacings` record into the parallel-
+ * array shape Convex's `bulkCreateNodes` validator accepts.
+ *
+ * Rules (loose end #4):
+ *   - Drop entries whose characterId isn't in the shot's character list.
+ *   - Drop entries whose value is `null` / undefined / the "unknown"
+ *     sentinel (Python already does this, but be defensive at the wire
+ *     boundary so a misbehaving ingester can't corrupt the Convex row).
+ *   - Preserve iteration order of the input record (V8 keeps insertion
+ *     order for string keys, which aligns with ff_vis_char_idxs order).
+ *   - Return `undefined` when the resulting array would be empty so the
+ *     caller can drop the field from the payload entirely.
+ */
+export const flattenCharacterFacings = (
+  facings: Record<string, CharacterFacing> | null | undefined,
+  characterIds: readonly string[] | undefined,
+): Array<{ characterId: string; facing: CharacterFacing }> | undefined => {
+  if (!facings) return undefined;
+  const allowed = characterIds && characterIds.length > 0 ? new Set(characterIds) : null;
+  const out: Array<{ characterId: string; facing: CharacterFacing }> = [];
+  for (const [characterId, facing] of Object.entries(facings)) {
+    if (!facing) continue;
+    if ((facing as string) === "unknown") continue;
+    if (allowed && !allowed.has(characterId)) continue;
+    out.push({ characterId, facing });
+  }
+  return out.length > 0 ? out : undefined;
+};
