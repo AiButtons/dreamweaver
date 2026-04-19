@@ -27,6 +27,7 @@ import { OutlinePanel } from "@/components/storyboard/OutlinePanel";
 import { ProductionHubDrawer } from "@/components/storyboard/ProductionHubDrawer";
 import { ExportMenu } from "@/components/storyboard/ExportMenu";
 import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
+import { CameoUploadDialog } from "@/components/storyboard/CameoUploadDialog";
 import {
   runShotValidators,
   SHOT_VALIDATOR_CODE_PREFIXES,
@@ -36,7 +37,7 @@ import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { createDefaultStoryNodeData } from "@/app/storyboard/defaults";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
 
 import {
   StoryNode,
@@ -254,6 +255,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const activeStoryboardId = storyboardIdOverride ?? params?.storyboardId ?? null;
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [cameoDialogOpen, setCameoDialogOpen] = useState(false);
   const [leftTab, setLeftTab] = useState<"outline" | "assistant">("outline");
   const [inspectorAnchor, setInspectorAnchor] = useState<{ x: number; y: number } | null>(null);
   const graphCanvasRef = useRef<HTMLDivElement | null>(null);
@@ -399,6 +401,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const resolveViolationMutation = useMutation(mutationRef("continuityOS:resolveViolation"));
   const publishIdentityPackMutation = useMutation(mutationRef("continuityOS:publishIdentityPack"));
   const addIdentityPortraitMutation = useMutation(mutationRef("identityReferences:addIdentityPortrait"));
+  const addCameoReferenceMutation = useMutation(mutationRef("identityReferences:addCameoReference"));
   const removeIdentityReferenceMutation = useMutation(mutationRef("identityReferences:removeIdentityReference"));
   const createBranchMutation = useMutation(mutationRef("narrativeGit:createBranch"));
   const cherryPickCommitMutation = useMutation(mutationRef("narrativeGit:cherryPickCommit"));
@@ -2058,6 +2061,19 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
               {saveStatusText}
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-[11px]"
+              onClick={() => setCameoDialogOpen(true)}
+              disabled={!activeStoryboardId || !snapshot}
+              aria-label="Add AutoCameo reference"
+              title="Upload a real-person photo as a cameo reference (consent + watermark required)"
+            >
+              <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+              Cameo
+            </Button>
             <GenerateAllShotsButton
               storyboardId={activeStoryboardId ?? ""}
               disabled={!activeStoryboardId || !snapshot}
@@ -2145,6 +2161,28 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         runtimeResolvedTeam={runtimeTeam ?? null}
         userIdentity={userIdentity}
       />
+      {activeStoryboardId ? (
+        <CameoUploadDialog
+          open={cameoDialogOpen}
+          onOpenChange={setCameoDialogOpen}
+          packOptions={(continuityBundle?.identityPacks ?? []).map((pack) => ({
+            packRowId: String(pack._id),
+            packName: typeof pack.name === "string" && pack.name.length > 0 ? pack.name : "Unnamed pack",
+          }))}
+          onSubmit={async (payload) => {
+            await addCameoReferenceMutation({
+              storyboardId: activeStoryboardId as Parameters<typeof addCameoReferenceMutation>[0]["storyboardId"],
+              ownerPackId: payload.ownerPackId as Parameters<typeof addCameoReferenceMutation>[0]["ownerPackId"],
+              sourceUrl: payload.watermarkedDataUrl,
+              consentStatus: payload.consentStatus,
+              watermarkApplied: payload.watermarkApplied,
+              attributionText: payload.attributionText,
+              cameoSourcePhotoHash: payload.cameoSourcePhotoHash,
+              notes: `AutoCameo · ${payload.attributionText}`,
+            });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

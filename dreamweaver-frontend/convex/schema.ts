@@ -630,6 +630,20 @@ export default defineSchema({
       v.literal("active"),
       v.literal("archived"),
     ),
+    // M3 #6 AutoCameo fields. Only populated on rows with role="cameo_reference".
+    // Consent must be recorded BEFORE the row is inserted; the shot-batch
+    // pipeline refuses to use cameo refs whose status is not "approved".
+    // Watermark is applied client-side by `applyCameoWatermark` in
+    // `src/lib/cameo/` and the result's sha256 is stored for forensic audit.
+    consentStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("denied"),
+    )),
+    watermarkApplied: v.optional(v.boolean()),
+    attributionText: v.optional(v.string()),
+    uploadedByUserId: v.optional(v.string()),
+    cameoSourcePhotoHash: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
