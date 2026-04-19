@@ -26,6 +26,7 @@ import { StoryboardCopilotBridge } from "@/components/storyboard/StoryboardCopil
 import { OutlinePanel } from "@/components/storyboard/OutlinePanel";
 import { ProductionHubDrawer } from "@/components/storyboard/ProductionHubDrawer";
 import { ExportMenu } from "@/components/storyboard/ExportMenu";
+import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
 import {
   runShotValidators,
   SHOT_VALIDATOR_CODE_PREFIXES,
@@ -2057,6 +2058,10 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
               {saveStatusText}
             </div>
+            <GenerateAllShotsButton
+              storyboardId={activeStoryboardId ?? ""}
+              disabled={!activeStoryboardId || !snapshot}
+            />
             <ExportMenu
               storyboardId={activeStoryboardId ?? ""}
               storyboardTitle={snapshot?.storyboard?.title ?? "Untitled"}

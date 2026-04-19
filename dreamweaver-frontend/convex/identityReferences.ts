@@ -114,3 +114,66 @@ export const listIdentityPortraitsForPack = query({
     );
   },
 });
+
+/**
+ * List every active portrait across every identity pack in a storyboard,
+ * grouped by the pack's `sourceCharacterId` (the character identifier the
+ * ViMax ingester uses to tag shots). Used by the shot-generation batch to
+ * resolve `shot.entityRefs.characterIds` → reference-image URLs in a single
+ * query instead of N sequential `listIdentityPortraitsForPack` calls.
+ *
+ * Packs without `sourceCharacterId` are grouped under their `name` so
+ * manually-created packs still surface; callers may match either key.
+ */
+export const listPortraitsForStoryboard = query({
+  args: {
+    storyboardId: v.id("storyboards"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const packs = await ctx.db
+      .query("identityPacks")
+      .withIndex("by_storyboard_pack", (q) => q.eq("storyboardId", args.storyboardId))
+      .collect();
+    const packsById = new Map<string, { key: string; name: string }>();
+    for (const p of packs) {
+      const key = p.sourceCharacterId && p.sourceCharacterId.length > 0
+        ? p.sourceCharacterId
+        : p.name;
+      packsById.set(p._id, { key, name: p.name });
+    }
+
+    // One table scan scoped by storyboard + role via the compound index; we
+    // filter status + pack membership in-memory.
+    const rows = await ctx.db
+      .query("identityReferenceAssets")
+      .withIndex("by_storyboard_role_createdAt", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("role", "portrait"),
+      )
+      .collect();
+
+    const groups: Record<
+      string,
+      Array<{
+        _id: string;
+        portraitView: string | undefined;
+        sourceUrl: string;
+        createdAt: number;
+      }>
+    > = {};
+    for (const row of rows) {
+      if (row.status !== "active") continue;
+      const meta = packsById.get(row.ownerPackId);
+      if (!meta) continue;
+      (groups[meta.key] ??= []).push({
+        _id: String(row._id),
+        portraitView: row.portraitView,
+        sourceUrl: row.sourceUrl,
+        createdAt: row.createdAt,
+      });
+    }
+    return { groups, packCount: packs.length };
+  },
+});
