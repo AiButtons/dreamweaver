@@ -69,6 +69,26 @@ export async function processIngestionResult(
     });
   }
 
+  // Portrait failures accumulate across both passes. Each entry is a
+  // `(characterId, view, reason)` tuple so the SSE consumer + final `done`
+  // payload can surface them to the producer. Without this, every failed
+  // portrait was a silent console.warn server-side and the UI shipped
+  // characters with an incomplete 3-view set.
+  const portraitFailures: PostProcessOutcome["portraitFailures"] = [];
+  const recordFailure = (p: typeof pythonResult.portraits[number], reason: string) => {
+    portraitFailures.push({
+      characterId: p.characterIdentifier,
+      view: p.view,
+      reason,
+    });
+    emit("portraits_failed", {
+      characterId: p.characterIdentifier,
+      view: p.view,
+      reason,
+      totalFailures: portraitFailures.length,
+    });
+  };
+
   let portraitsDone = 0;
   await Promise.all(
     pass1.map(async (i) => {
@@ -79,7 +99,11 @@ export async function processIngestionResult(
         cookieHeader,
       });
       portraitUrlResults[i] = url;
-      if (url) resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+      if (url) {
+        resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+      } else {
+        recordFailure(p, "portrait generator returned no image");
+      }
       portraitsDone += 1;
       emit("portraits_progress", {
         done: portraitsDone,
@@ -108,6 +132,10 @@ export async function processIngestionResult(
           `[postprocess] portrait "${p.characterIdentifier}/${p.view}" needed ${refView} reference — skipping`,
         );
         portraitUrlResults[i] = null;
+        // Surface this as a failure too — without the front reference,
+        // the whole side/back conditioning path is a dead end for this
+        // character, and the producer should know.
+        recordFailure(p, `${refView} reference missing (upstream failure)`);
         portraitsDone += 1;
         emit("portraits_progress", {
           done: portraitsDone,
@@ -123,7 +151,11 @@ export async function processIngestionResult(
         referenceImageUrls: refUrl ? [refUrl] : undefined,
       });
       portraitUrlResults[i] = url;
-      if (url) resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+      if (url) {
+        resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+      } else {
+        recordFailure(p, "portrait generator returned no image");
+      }
       portraitsDone += 1;
       emit("portraits_progress", {
         done: portraitsDone,
@@ -281,6 +313,7 @@ export async function processIngestionResult(
     identityPacksWritten: packIdByCharacter.size,
     identityPackFailures,
     portraitCount: portraitRowsWritten,
+    portraitFailures,
     nodeCount: nodesWritten,
     edgeCount: edgesWritten,
     durationMs: Date.now() - startedAt,

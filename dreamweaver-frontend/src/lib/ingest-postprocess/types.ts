@@ -77,7 +77,20 @@ export interface PostProcessOutcome {
   characterCount: number;
   identityPacksWritten: number;
   identityPackFailures: string[];
+  /** Count of reference portraits successfully attached to identity packs. */
   portraitCount: number;
+  /**
+   * Per-character list of portrait views that the generator failed to
+   * produce (media provider error, safety filter, timeout, etc.). Surfaced
+   * in the SSE `portraits_failed` event + the `done` payload so the UI can
+   * warn the producer instead of silently shipping characters with
+   * incomplete 3-view sets.
+   */
+  portraitFailures: Array<{
+    characterId: string;
+    view: PortraitView;
+    reason: string;
+  }>;
   nodeCount: number;
   edgeCount: number;
   durationMs: number;
@@ -92,6 +105,7 @@ export interface PostProcessOutcome {
 export type PostProcessEventType =
   | "stage"
   | "portraits_progress"
+  | "portraits_failed"
   | "writing_identities"
   | "writing_portraits"
   | "writing_graph";

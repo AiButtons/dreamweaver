@@ -284,6 +284,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           characterCount: outcome.characterCount,
           identityPacksWritten: outcome.identityPacksWritten,
           portraitCount: outcome.portraitCount,
+          portraitFailureCount: outcome.portraitFailures.length,
+          portraitFailures: outcome.portraitFailures,
           nodeCount: outcome.nodeCount,
           edgeCount: outcome.edgeCount,
           llmCallCount: pythonResult.llmCallCount,

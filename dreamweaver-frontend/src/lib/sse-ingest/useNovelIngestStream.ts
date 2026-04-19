@@ -28,11 +28,17 @@ export interface EpisodeRow {
   error?: string;
 }
 
+// PortraitFailure shape is re-exported from `useIngestStream`; don't
+// redeclare here to avoid barrel-export ambiguity.
+import type { PortraitFailure } from "./useIngestStream";
+
 export interface NovelDoneEvent {
   storyboardId: string;
   characterCount: number;
   identityPacksWritten?: number;
   portraitCount: number;
+  portraitFailureCount?: number;
+  portraitFailures?: PortraitFailure[];
   episodeCount: number;
   nodeCount: number;
   edgeCount: number;
@@ -52,6 +58,8 @@ export interface NovelIngestState {
   portraits?: { done: number; total: number; phase: string };
   write?: { kind: "identities" | "portraits"; done: number; total: number };
   episodes: EpisodeRow[];
+  /** Running tally of portraits_failed events seen mid-stream. */
+  portraitFailures?: PortraitFailure[];
   done?: NovelDoneEvent;
   error?: string;
   elapsedMs: number;
@@ -190,6 +198,21 @@ export function useNovelIngestStream() {
                     total: parsed.total as number,
                     phase: (parsed.phase as string) ?? "front",
                   },
+                }));
+                break;
+              }
+              case "portraits_failed": {
+                const characterId = parsed.characterId as string | undefined;
+                const view = parsed.view as string | undefined;
+                if (!characterId || !view) break;
+                const entry: PortraitFailure = {
+                  characterId,
+                  view,
+                  reason: (parsed.reason as string | undefined) ?? "unknown",
+                };
+                setState((prev) => ({
+                  ...prev,
+                  portraitFailures: [...(prev.portraitFailures ?? []), entry],
                 }));
                 break;
               }

@@ -296,6 +296,31 @@ export async function POST(request: NextRequest): Promise<Response> {
             totalPortraits,
           });
         }
+        // Track portrait failures so the producer learns about them via
+        // the SSE stream + final done payload, instead of silently shipping
+        // characters with incomplete 3-view sets (P0 QA finding).
+        const portraitFailures: Array<{
+          characterId: string;
+          view: PortraitView;
+          reason: string;
+        }> = [];
+        const recordPortraitFailure = (
+          p: (typeof pythonResult)["portraits"][number],
+          reason: string,
+        ) => {
+          portraitFailures.push({
+            characterId: p.characterIdentifier,
+            view: p.view as PortraitView,
+            reason,
+          });
+          send("portraits_failed", {
+            characterId: p.characterIdentifier,
+            view: p.view,
+            reason,
+            totalFailures: portraitFailures.length,
+          });
+        };
+
         let portraitsDone = 0;
         await Promise.all(
           pass1.map(async (i) => {
@@ -306,7 +331,11 @@ export async function POST(request: NextRequest): Promise<Response> {
               cookieHeader,
             });
             portraitUrlResults[i] = url;
-            if (url) resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+            if (url) {
+              resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+            } else {
+              recordPortraitFailure(p, "portrait generator returned no image");
+            }
             portraitsDone += 1;
             send("portraits_progress", {
               done: portraitsDone,
@@ -330,6 +359,22 @@ export async function POST(request: NextRequest): Promise<Response> {
             const refUrl = refView
               ? resolvedByCharView.get(portraitKey(p.characterIdentifier, refView))
               : undefined;
+            if (refView && !refUrl) {
+              // Upstream pass1 portrait failed, so the side/back conditioning
+              // has nothing to reference. Skip + surface the cascade.
+              recordPortraitFailure(
+                p,
+                `${refView} reference missing (upstream failure)`,
+              );
+              portraitUrlResults[i] = null;
+              portraitsDone += 1;
+              send("portraits_progress", {
+                done: portraitsDone,
+                total: totalPortraits,
+                phase: "side_back",
+              });
+              return;
+            }
             const url = await generatePortraitImage({
               origin,
               prompt: p.prompt,
@@ -337,7 +382,11 @@ export async function POST(request: NextRequest): Promise<Response> {
               referenceImageUrls: refUrl ? [refUrl] : undefined,
             });
             portraitUrlResults[i] = url;
-            if (url) resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+            if (url) {
+              resolvedByCharView.set(portraitKey(p.characterIdentifier, p.view), url);
+            } else {
+              recordPortraitFailure(p, "portrait generator returned no image");
+            }
             portraitsDone += 1;
             send("portraits_progress", {
               done: portraitsDone,
@@ -509,6 +558,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           characterCount: pythonResult.characters.length,
           identityPacksWritten: packIdByCharacter.size,
           portraitCount: portraitRowsWritten,
+          portraitFailureCount: portraitFailures.length,
+          portraitFailures,
           episodeCount: pythonResult.episodes.length,
           nodeCount: totalShotsWritten,
           edgeCount: totalEdgesWritten,

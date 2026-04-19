@@ -39,6 +39,7 @@ def _make_decomp(
     variation: str = "medium",
     ff_vis: list | None = None,
     ff_facings: list | None = None,
+    lf_vis: list | None = None,
 ) -> ShotDescription:
     ff_vis_list = ff_vis or []
     return ShotDescription(
@@ -52,7 +53,7 @@ def _make_decomp(
         ff_vis_char_idxs=ff_vis_list,
         ff_char_facings=ff_facings if ff_facings is not None else ["unknown"] * len(ff_vis_list),
         lf_desc=f"lf {idx}",
-        lf_vis_char_idxs=[],
+        lf_vis_char_idxs=lf_vis or [],
         motion_desc=f"motion {idx}",
         audio_desc="audio",
     )
@@ -392,3 +393,75 @@ def test_mapper_drops_facings_for_unresolved_character_indices():
     )
     assert nodes[0].characterIdentifiers == ["Alice"]
     assert nodes[0].characterFacings == {"Alice": "toward_camera"}
+
+
+# ---------------------------------------------------------------------------
+# P0 #3 — characters entering mid-shot.
+#
+# Dogfooding surfaced that a shot where character A is present in the first
+# frame and B enters by the last frame was getting only A on its
+# `characterIdentifiers`. The shot-batch selector couldn't pull B's
+# portraits, so generated shots were missing identity locks for newcomers.
+# The mapper now unions `ff_vis_char_idxs` + `lf_vis_char_idxs`.
+# ---------------------------------------------------------------------------
+
+
+def test_mapper_unions_ff_and_lf_visible_characters():
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0],        # Alice is in the first frame
+            ff_facings=["toward_camera"],
+            lf_vis=[0, 1],     # Bob is in the last frame too
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice", 1: "Bob"},
+    )
+    # Alice from ff + Bob from lf, deduped + Alice-first order preserved.
+    assert nodes[0].characterIdentifiers == ["Alice", "Bob"]
+    # Facing only available for Alice (ff); Bob has no facing.
+    assert nodes[0].characterFacings == {"Alice": "toward_camera"}
+
+
+def test_mapper_dedupes_characters_present_in_both_frames():
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0, 1],
+            ff_facings=["toward_camera", "screen_left"],
+            lf_vis=[1, 0],  # Same two characters, reversed order
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice", 1: "Bob"},
+    )
+    # FF order preserved; LF doesn't re-insert the same characters.
+    assert nodes[0].characterIdentifiers == ["Alice", "Bob"]
+
+
+def test_mapper_lf_only_character_with_unresolved_index_is_dropped():
+    briefs = [_make_brief(0)]
+    decomps = [
+        _make_decomp(
+            0,
+            ff_vis=[0],
+            ff_facings=["toward_camera"],
+            lf_vis=[0, 42],  # 42 not in the lookup → dropped silently
+        )
+    ]
+    nodes, _ = shots_and_edges_from_descriptions(
+        briefs=briefs,
+        decompositions=decomps,
+        style_hint="cinematic",
+        character_lookup_by_idx={0: "Alice"},
+    )
+    assert nodes[0].characterIdentifiers == ["Alice"]

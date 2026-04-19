@@ -267,6 +267,23 @@ export function NovelIngestForm({
               </div>
             </div>
           ) : null}
+          {state.portraitFailures && state.portraitFailures.length > 0 ? (
+            <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+              <div className="font-semibold">
+                {state.portraitFailures.length} portrait{state.portraitFailures.length === 1 ? "" : "s"} failed to generate
+              </div>
+              <ul className="mt-1 space-y-0.5 text-[10px]">
+                {state.portraitFailures.slice(0, 4).map((f) => (
+                  <li key={`${f.characterId}:${f.view}`}>
+                    · {f.characterId} / {f.view} — {f.reason}
+                  </li>
+                ))}
+                {state.portraitFailures.length > 4 ? (
+                  <li>· +{state.portraitFailures.length - 4} more</li>
+                ) : null}
+              </ul>
+            </div>
+          ) : null}
           {state.kind === "error" && state.error ? (
             <div className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">
               {state.error}

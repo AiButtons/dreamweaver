@@ -213,23 +213,40 @@ def shots_and_edges_from_descriptions(
             continuityDirectives=[],
         )
 
+        # Character attribution: union of first-frame + last-frame visible
+        # characters. Dogfooding surfaced that using `ff_vis_char_idxs`
+        # alone misses characters who enter mid-shot — e.g. "DANIEL steps
+        # into view from the dark background" gives a first frame with
+        # only MAYA even though both characters carry the dialogue. The
+        # shot-batch selector needs every character appearing in the shot
+        # to pull their portraits, so we union ff + lf. Facings come only
+        # from the first frame (lf facings aren't emitted by the LLM yet).
         char_ids: List[str] = []
+        seen_cids: set[str] = set()
         facings_by_char: Dict[str, str] = {}
         if decomp:
             ff_idxs = decomp.ff_vis_char_idxs or []
             ff_facings = decomp.ff_char_facings or []
             for pos, idx in enumerate(ff_idxs):
                 cid = character_lookup_by_idx.get(idx)
-                if not cid:
+                if not cid or cid in seen_cids:
                     continue
                 char_ids.append(cid)
-                # Parallel-array alignment: grab the facing at the same
-                # position. "unknown" or out-of-range → drop the entry so
-                # the downstream map stays tight.
+                seen_cids.add(cid)
+                # Parallel-array alignment with ff: grab the facing at the
+                # same position. "unknown" or out-of-range → drop so the
+                # downstream map stays tight.
                 if pos < len(ff_facings):
                     facing = ff_facings[pos]
                     if facing and facing != "unknown":
                         facings_by_char[cid] = facing
+            # Now fold in last-frame-only characters (dedup against ff).
+            for idx in decomp.lf_vis_char_idxs or []:
+                cid = character_lookup_by_idx.get(idx)
+                if not cid or cid in seen_cids:
+                    continue
+                char_ids.append(cid)
+                seen_cids.add(cid)
 
         node = IngestedShotNode(
             nodeId=node_id,

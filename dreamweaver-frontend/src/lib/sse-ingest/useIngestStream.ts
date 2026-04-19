@@ -27,11 +27,21 @@ export interface WriteProgressEvent {
   phase?: "nodes" | "edges";
 }
 
+export interface PortraitFailure {
+  characterId: string;
+  view: string;
+  reason: string;
+}
+
 export interface DoneEvent {
   storyboardId: string;
   characterCount: number;
   identityPacksWritten?: number;
   portraitCount: number;
+  /** Count of portraits the pipeline attempted but couldn't write. */
+  portraitFailureCount?: number;
+  /** Detail rows for each failure — surfaced in the "done" summary UI. */
+  portraitFailures?: PortraitFailure[];
   nodeCount: number;
   edgeCount: number;
   llmCallCount: number;
@@ -47,6 +57,8 @@ export interface IngestStreamState {
   message?: string;
   portraits?: { done: number; total: number; phase: string };
   write?: { kind: "identities" | "portraits" | "nodes" | "edges"; done: number; total: number };
+  /** Running tally of portrait failures emitted mid-stream. */
+  portraitFailures?: PortraitFailure[];
   done?: DoneEvent;
   error?: string;
   elapsedMs: number;
@@ -160,6 +172,24 @@ export function useIngestStream() {
                 setState((prev) => ({
                   ...prev,
                   portraits: { done: p.done, total: p.total, phase: p.phase ?? "front" },
+                }));
+                break;
+              }
+              case "portraits_failed": {
+                const f = parsed as {
+                  characterId?: string;
+                  view?: string;
+                  reason?: string;
+                };
+                if (!f.characterId || !f.view) break;
+                const entry: PortraitFailure = {
+                  characterId: f.characterId,
+                  view: f.view,
+                  reason: f.reason ?? "unknown",
+                };
+                setState((prev) => ({
+                  ...prev,
+                  portraitFailures: [...(prev.portraitFailures ?? []), entry],
                 }));
                 break;
               }
