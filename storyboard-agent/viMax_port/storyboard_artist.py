@@ -3,7 +3,11 @@
 Changes from upstream:
 - Imports use `_vimax_types` rather than ViMax's `interfaces` package.
 - `after_func` is inlined as a no-op.
-- Public class surface and prompt text are unchanged.
+- PydanticOutputParser + `{format_instructions}` replaced with LangChain's
+  `with_structured_output(..., method="json_schema", strict=True)`. GPT-5.4's
+  native JSON-schema mode enforces the response shape — no need to inject
+  format instructions into the prompt.
+- Public class surface and prompt intent are unchanged.
 """
 
 from __future__ import annotations
@@ -11,7 +15,6 @@ from __future__ import annotations
 import asyncio
 from typing import List, Literal, Optional
 
-from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt
@@ -46,7 +49,10 @@ The user will provide the following input.
     - Other specific instructions (e.g., emphasize the characters' actions).
 
 [Output]
-{format_instructions}
+Return a JSON object matching the provided schema. The `storyboard` field must
+be an ordered list of shots. Each shot must carry `idx` (0-based), `is_last`,
+`cam_idx` (0-based camera position — reuse where possible), `visual_desc`, and
+`audio_desc`.
 
 [Guidelines]
 - Ensure all output values (except keys) match the language used in the script.
@@ -60,6 +66,7 @@ The user will provide the following input.
 - Each shot requires an independent description without reference to each other.
 - When the shot focuses on a character, describe which specific body part the focus is on.
 - When describing a character, it is necessary to indicate the direction they are facing.
+- Set `is_last` to True only on the final shot of the storyboard.
 """
 
 human_prompt_template_design_storyboard = """
@@ -93,9 +100,10 @@ Additionally, you will receive a sequence of potential characters, each containi
 - The description is enclosed within <VISUAL_DESC> and </VISUAL_DESC>.
 - The character list is enclosed within <CHARACTERS> and </CHARACTERS>.
 
-
 [Output]
-{format_instructions}
+Return a JSON object matching the provided schema with fields `ff_desc`,
+`ff_vis_char_idxs`, `lf_desc`, `lf_vis_char_idxs`, `motion_desc`,
+`variation_type` ("large" | "medium" | "small"), and `variation_reason`.
 
 [Guidelines]
 - Ensure all output values (except keys) match the language used in the script.
@@ -133,20 +141,15 @@ class VisDescDecompositionResponse(BaseModel):
     )
     ff_vis_char_idxs: List[int] = Field(
         description="Indices of characters visible in the first frame.",
-        examples=[[0], [1], [0, 1], []],
     )
     lf_desc: str = Field(
         description="A detailed description of the last frame of the shot.",
     )
     lf_vis_char_idxs: List[int] = Field(
         description="Indices of characters visible in the last frame.",
-        examples=[[0], [1], [0, 1], []],
     )
     motion_desc: str = Field(
         description="The motion description of the shot.",
-        examples=[
-            "Static camera. Alice (short hair, wearing a green dress) is walking towards the camera.",
-        ],
     )
     variation_type: Literal["large", "medium", "small"] = Field(
         description="The degree of change between the first and last frames.",
@@ -179,14 +182,13 @@ class StoryboardArtist:
         )
         user_requirement_str = user_requirement.strip() if user_requirement else ""
 
-        parser = PydanticOutputParser(pydantic_object=StoryboardResponse)
+        structured_model = self.chat_model.with_structured_output(
+            StoryboardResponse,
+            method="json_schema",
+            strict=True,
+        )
         messages = [
-            (
-                "system",
-                system_prompt_template_design_storyboard.format(
-                    format_instructions=parser.get_format_instructions()
-                ),
-            ),
+            ("system", system_prompt_template_design_storyboard),
             (
                 "human",
                 human_prompt_template_design_storyboard.format(
@@ -196,9 +198,8 @@ class StoryboardArtist:
                 ),
             ),
         ]
-        chain = self.chat_model | parser
         response: StoryboardResponse = await asyncio.wait_for(
-            chain.ainvoke(messages),
+            structured_model.ainvoke(messages),
             timeout=retry_timeout,
         )
         return response.storyboard
@@ -210,14 +211,18 @@ class StoryboardArtist:
         characters: List[CharacterInScene],
         retry_timeout: int = 150,
     ) -> ShotDescription:
-        parser = PydanticOutputParser(pydantic_object=VisDescDecompositionResponse)
+        structured_model = self.chat_model.with_structured_output(
+            VisDescDecompositionResponse,
+            method="json_schema",
+            strict=True,
+        )
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", system_prompt_template_decompose_visual_description),
                 ("human", human_prompt_template_decompose_visual_description),
             ]
         )
-        chain = prompt_template | self.chat_model | parser
+        chain = prompt_template | structured_model
 
         visual_desc = shot_brief_desc.visual_desc.strip()
         characters_str = "\n".join(
@@ -230,7 +235,6 @@ class StoryboardArtist:
         decomposition: VisDescDecompositionResponse = await asyncio.wait_for(
             chain.ainvoke(
                 input={
-                    "format_instructions": parser.get_format_instructions(),
                     "visual_desc": visual_desc,
                     "characters_str": characters_str,
                 },

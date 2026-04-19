@@ -18,7 +18,13 @@ from viMax_port.mapper import (
 )
 
 
-def _make_brief(idx: int, visual: str = "A wide shot of a park.") -> ShotBriefDescription:
+def _make_brief(
+    idx: int,
+    # Default deliberately has no cinematic vocabulary so text-match returns
+    # nothing — lets variation_type fallbacks drive the tests that predate
+    # the text-match upgrade. Override per-test when exercising text-match.
+    visual: str = "A scene of characters in a park.",
+) -> ShotBriefDescription:
     return ShotBriefDescription(
         idx=idx,
         is_last=False,
@@ -173,8 +179,13 @@ def test_shots_and_edges_empty_input():
 
 
 def test_shots_and_edges_missing_decomposition_falls_back():
-    """A brief with no matching decomposition still produces a node with
-    default shotMeta (aspect 9:16) and no derived character identifiers."""
+    """A brief with no matching decomposition still produces a node.
+
+    With the text-match upgrade, the brief's `visual_desc` is searched for
+    cinematic vocabulary. Our default `_make_brief` fixture uses a neutral
+    description, so neither text-match nor variation_type fires for the
+    first brief → `size` falls back to "MS" (the final default).
+    """
     briefs = [_make_brief(0), _make_brief(1)]
     decomps = [_make_decomp(1, variation="small", ff_vis=[])]
     nodes, edges = shots_and_edges_from_descriptions(
@@ -185,11 +196,60 @@ def test_shots_and_edges_missing_decomposition_falls_back():
     )
     assert len(nodes) == 2
     assert len(edges) == 1
-    # First brief had no decomp -> default meta, size/move None
-    assert nodes[0].shotMeta.size is None
+    # First brief: no decomp + neutral visual_desc -> "MS" fallback.
+    assert nodes[0].shotMeta.size == "MS"
     assert nodes[0].shotMeta.aspect == "9:16"
-    # Second brief had a "small" decomp -> MCU
+    # Second brief had a "small" decomp + neutral text -> variation fallback = MCU.
     assert nodes[1].shotMeta.size == "MCU"
+
+
+def test_shot_meta_text_match_extracts_size_from_visual_desc():
+    """When the brief's visual_desc names a canonical shot size, it wins
+    over the variation_type fallback."""
+    brief = _make_brief(0, visual="Extreme close-up of a trembling hand.")
+    decomp = _make_decomp(0, variation="large")  # variation would say "WS"
+    meta = shot_meta_from_description(decomp, style_hint="", brief=brief)
+    assert meta.size == "ECU"
+
+
+def test_shot_meta_text_match_extracts_move():
+    """Camera moves spelled out in motion_desc flow into ShotMeta.move."""
+    brief = _make_brief(0, visual="A medium shot of Alice at the desk.")
+    decomp = ShotDescription(
+        idx=0,
+        is_last=False,
+        cam_idx=0,
+        visual_desc="visual",
+        variation_type="small",  # fallback would say "static"
+        variation_reason="reason",
+        ff_desc="ff",
+        ff_vis_char_idxs=[],
+        lf_desc="lf",
+        lf_vis_char_idxs=[],
+        motion_desc="Camera whip-pans to the door as it slams shut.",
+        audio_desc="",
+    )
+    meta = shot_meta_from_description(decomp, style_hint="", brief=brief)
+    assert meta.size == "MS"
+    assert meta.move == "whip_pan"
+
+
+def test_shot_meta_text_match_screen_direction():
+    brief = _make_brief(
+        0,
+        visual="Medium shot. Alice walks from left-to-right across the frame.",
+    )
+    decomp = _make_decomp(0, variation="medium")
+    meta = shot_meta_from_description(decomp, style_hint="", brief=brief)
+    assert meta.screenDirection == "left_to_right"
+
+
+def test_shot_meta_text_match_low_angle():
+    brief = _make_brief(0, visual="Low angle close-up on Alice looking up.")
+    decomp = _make_decomp(0, variation="small")
+    meta = shot_meta_from_description(decomp, style_hint="", brief=brief)
+    assert meta.angle == "low"
+    assert meta.size == "CU"
 
 
 def test_prompt_pack_combines_visual_and_ff():

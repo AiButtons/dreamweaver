@@ -3,14 +3,17 @@
 Changes from upstream:
 - Imports point at local `_vimax_types` rather than ViMax's `interfaces` package.
 - The `after_func` retry callback is inlined (was `utils.retry.after_func` in ViMax).
-- Public class surface and prompt text are unchanged.
+- PydanticOutputParser + `{format_instructions}` replaced with LangChain's
+  `with_structured_output(..., method="json_schema", strict=True)`. GPT-5.4's
+  native structured-output mode enforces the schema server-side, so we no
+  longer need to embed JSON-schema text in the prompt.
+- Public class surface and prompt intent are unchanged.
 """
 
 from __future__ import annotations
 
 from typing import List
 
-from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt
@@ -41,8 +44,9 @@ Her finger traces the rim of the ceramic mug, following the imperfect circle ove
 </SCRIPT>
 
 [Output]
-{format_instructions}
-
+Return a JSON object matching the provided schema. The `characters` field must be
+a list of character objects with `idx`, `identifier_in_scene`, `is_visible`,
+`static_features`, and `dynamic_features`.
 
 [Guidelines]
 - Ensure that the language of all output values(not include keys) matches that used in the script.
@@ -54,6 +58,7 @@ Her finger traces the rim of the ceramic mug, following the imperfect circle ove
 - Don't include any information about the character's personality, role, or relationships with others in either static or dynamic features.
 - When designing character features, within reasonable limits, different character appearances should be made more distinct from each other.
 - The description of characters should be detailed, avoiding the use of abstract terms. Instead, employ descriptions that can be visualized—such as specific clothing colors and concrete physical traits (e.g., large eyes, a high nose bridge).
+- Assign a stable `idx` to each character starting at 0 in the order they first appear in the script.
 """
 
 human_prompt_template_extract_characters = """
@@ -75,19 +80,16 @@ class CharacterExtractor:
 
     @retry(stop=stop_after_attempt(3), after=_after_func)
     async def extract_characters(self, script: str) -> List[CharacterInScene]:
-        parser = PydanticOutputParser(pydantic_object=ExtractCharactersResponse)
-
+        structured_model = self.chat_model.with_structured_output(
+            ExtractCharactersResponse,
+            method="json_schema",
+            strict=True,
+        )
         messages = [
-            SystemMessage(
-                content=system_prompt_template_extract_characters.format(
-                    format_instructions=parser.get_format_instructions()
-                )
-            ),
+            SystemMessage(content=system_prompt_template_extract_characters),
             HumanMessage(
                 content=human_prompt_template_extract_characters.format(script=script)
             ),
         ]
-
-        chain = self.chat_model | parser
-        response: ExtractCharactersResponse = await chain.ainvoke(messages)
+        response: ExtractCharactersResponse = await structured_model.ainvoke(messages)
         return response.characters
