@@ -1223,6 +1223,212 @@ export const upsertNode = mutation({
   },
 });
 
+/**
+ * Bulk-upsert N nodes in one Convex transaction. Used by the ViMax M1
+ * screenplay-ingest pipeline to atomically insert a shot list without
+ * spamming N individual `upsertNode` calls.
+ *
+ * Existing rows are patched in-place (same upsert semantics as `upsertNode`).
+ * `recomputeStoryboardStatsInternal` runs once at the end, not per-node.
+ */
+export const bulkCreateNodes = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    nodes: v.array(
+      v.object({
+        nodeId: v.string(),
+        nodeType,
+        label: v.string(),
+        segment: v.string(),
+        position: v.object({ x: v.number(), y: v.number() }),
+        continuityStatus: v.optional(consistencyStatus),
+        shotMeta: v.optional(shotMetaValidator),
+        promptPack: v.optional(
+          v.object({
+            imagePrompt: v.optional(v.string()),
+            videoPrompt: v.optional(v.string()),
+            negativePrompt: v.optional(v.string()),
+            continuityDirectives: v.optional(v.array(v.string())),
+          }),
+        ),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const now = Date.now();
+
+    // Dedupe by nodeId within the batch — later entry wins. Keeps the caller
+    // honest without blowing up on a repeated row.
+    const seen = new Map<string, (typeof args.nodes)[number]>();
+    for (const n of args.nodes) {
+      seen.set(n.nodeId, n);
+    }
+
+    const insertedIds: Id<"storyboardNodes">[] = [];
+    const patchedIds: Id<"storyboardNodes">[] = [];
+
+    for (const n of seen.values()) {
+      const existing = await ctx.db
+        .query("storyboardNodes")
+        .withIndex("by_storyboard_node", (q) =>
+          q.eq("storyboardId", args.storyboardId).eq("nodeId", n.nodeId),
+        )
+        .unique();
+
+      if (!existing) {
+        const base = defaultNodePayload(
+          n.nodeId,
+          n.nodeType,
+          n.label,
+          n.segment,
+          n.position,
+          now,
+        );
+        const payload: Record<string, unknown> = {
+          storyboardId: args.storyboardId,
+          userId,
+          ...base,
+        };
+        if (n.shotMeta !== undefined) payload.shotMeta = n.shotMeta;
+        if (n.promptPack !== undefined) {
+          payload.promptPack = {
+            ...base.promptPack,
+            imagePrompt: n.promptPack.imagePrompt,
+            videoPrompt: n.promptPack.videoPrompt,
+            negativePrompt: n.promptPack.negativePrompt,
+            continuityDirectives:
+              n.promptPack.continuityDirectives ?? base.promptPack.continuityDirectives,
+          };
+        }
+        const id = await ctx.db.insert(
+          "storyboardNodes",
+          payload as Parameters<typeof ctx.db.insert>[1],
+        );
+        insertedIds.push(id);
+      } else {
+        const mergedPromptPack = n.promptPack
+          ? {
+              ...existing.promptPack,
+              imagePrompt: n.promptPack.imagePrompt ?? existing.promptPack.imagePrompt,
+              videoPrompt: n.promptPack.videoPrompt ?? existing.promptPack.videoPrompt,
+              negativePrompt:
+                n.promptPack.negativePrompt ?? existing.promptPack.negativePrompt,
+              continuityDirectives:
+                n.promptPack.continuityDirectives ?? existing.promptPack.continuityDirectives,
+            }
+          : existing.promptPack;
+        await ctx.db.patch(existing._id, {
+          nodeType: n.nodeType,
+          label: n.label,
+          segment: n.segment,
+          position: n.position,
+          continuity: {
+            ...existing.continuity,
+            consistencyStatus:
+              n.continuityStatus ?? existing.continuity.consistencyStatus,
+          },
+          shotMeta: n.shotMeta ?? existing.shotMeta,
+          promptPack: mergedPromptPack,
+          updatedAt: now,
+        });
+        patchedIds.push(existing._id);
+      }
+    }
+
+    await ctx.db.patch(args.storyboardId, { updatedAt: now });
+    await recomputeStoryboardStatsInternal(ctx, args.storyboardId);
+
+    return {
+      insertedIds,
+      patchedIds,
+      total: insertedIds.length + patchedIds.length,
+    };
+  },
+});
+
+/**
+ * Bulk-upsert N edges in one transaction. Same rationale as `bulkCreateNodes`.
+ * Caller is responsible for ensuring sourceNodeId / targetNodeId refer to
+ * nodes that already exist (typically by calling `bulkCreateNodes` first).
+ */
+export const bulkCreateEdges = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    edges: v.array(
+      v.object({
+        edgeId: v.string(),
+        sourceNodeId: v.string(),
+        targetNodeId: v.string(),
+        edgeType,
+        branchId: v.optional(v.string()),
+        order: v.optional(v.number()),
+        isPrimary: v.optional(v.boolean()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const now = Date.now();
+
+    const seen = new Map<string, (typeof args.edges)[number]>();
+    for (const e of args.edges) {
+      seen.set(e.edgeId, e);
+    }
+
+    const insertedIds: Id<"storyboardEdges">[] = [];
+    const patchedIds: Id<"storyboardEdges">[] = [];
+
+    for (const e of seen.values()) {
+      const existing = await ctx.db
+        .query("storyboardEdges")
+        .withIndex("by_storyboard_edge", (q) =>
+          q.eq("storyboardId", args.storyboardId).eq("edgeId", e.edgeId),
+        )
+        .unique();
+
+      if (!existing) {
+        const id = await ctx.db.insert("storyboardEdges", {
+          storyboardId: args.storyboardId,
+          userId,
+          edgeId: e.edgeId,
+          sourceNodeId: e.sourceNodeId,
+          targetNodeId: e.targetNodeId,
+          edgeType: e.edgeType,
+          branchId: e.branchId,
+          order: e.order,
+          isPrimary: e.isPrimary ?? false,
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertedIds.push(id);
+      } else {
+        await ctx.db.patch(existing._id, {
+          sourceNodeId: e.sourceNodeId,
+          targetNodeId: e.targetNodeId,
+          edgeType: e.edgeType,
+          branchId: e.branchId,
+          order: e.order,
+          isPrimary: e.isPrimary ?? existing.isPrimary,
+          updatedAt: now,
+        });
+        patchedIds.push(existing._id);
+      }
+    }
+
+    await ctx.db.patch(args.storyboardId, { updatedAt: now });
+    await recomputeStoryboardStatsInternal(ctx, args.storyboardId);
+
+    return {
+      insertedIds,
+      patchedIds,
+      total: insertedIds.length + patchedIds.length,
+    };
+  },
+});
+
 export const deleteNode = mutation({
   args: {
     storyboardId: v.id("storyboards"),

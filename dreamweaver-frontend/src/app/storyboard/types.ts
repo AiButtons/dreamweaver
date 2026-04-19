@@ -264,6 +264,37 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type StoryboardStatus = "active" | "trashed";
 export type StoryboardSort = "updated_desc" | "updated_asc" | "title_asc" | "created_desc";
 
+// ---------------------------------------------------------------------------
+// Screenplay ingestion (ViMax M1) — progress shape surfaced through CopilotKit
+// state sync so the React form can render a stage-specific progress bar while
+// the Python screenplay_ingester subagent works through the pipeline.
+// ---------------------------------------------------------------------------
+export type ScriptIngestStage =
+  | "idle"
+  | "preprocessing"          // screenplay → prose pre-pass
+  | "extracting_characters"  // LLM character extraction
+  | "generating_portraits"   // front-view portraits per character
+  | "designing_storyboard"   // LLM shot list
+  | "decomposing_shots"      // per-shot ff/lf/motion decomposition
+  | "writing_to_convex"      // bulk node/edge/identity writes
+  | "complete"
+  | "failed";
+
+export interface ScriptIngestProgress {
+  stage: ScriptIngestStage;
+  /** 0-100, best-effort. */
+  percentComplete: number;
+  /** Short human-readable sentence — e.g. "Generated 3 / 5 portraits." */
+  statusMessage: string;
+  /** Populated once the ingestion creates / resumes a storyboard. */
+  storyboardId?: string;
+  /** Running counts — surfaced in the UI as the pipeline progresses. */
+  characterCount?: number;
+  shotCount?: number;
+  /** Present only when stage === "failed". */
+  error?: string;
+}
+
 export interface StoryboardLibraryItem {
   _id: string;
   title: string;

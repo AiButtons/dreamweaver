@@ -6,6 +6,7 @@ import { CopilotSidebar } from "@copilotkit/react-ui";
 import { useMutation } from "convex/react";
 import {
   RuntimeResolvedTeam,
+  type ScriptIngestProgress,
   StoryEdge,
   StoryNode,
   TeamMemberConfig,
@@ -101,6 +102,13 @@ type StoryboardAgentState = {
   // Snake-cased alias so the Python router (`RouterState`) can log the identity in
   // its `policy_trace` for audit correlation without re-mapping in the graph.
   user_identity: UserIdentity | null;
+  // Screenplay ingestion progress (ViMax M1). `null` outside of an active
+  // ingestion run. The Python screenplay_ingester subagent patches this
+  // field as it walks through the pipeline stages; CopilotKit's state sync
+  // pushes the updates to the React form's progress bar.
+  scriptIngestProgress: ScriptIngestProgress | null;
+  // Snake-cased alias for the Python router.
+  script_ingest_progress: ScriptIngestProgress | null;
 };
 
 type DryRunRiskLevel = "low" | "medium" | "high" | "critical";
@@ -597,6 +605,11 @@ export function StoryboardCopilotBridge({
       effective_resource_scope: runtimeResolvedTeam?.resourceScopes ?? [],
       userIdentity,
       user_identity: userIdentity,
+      // Script-ingest progress is null until the screenplay_ingester subagent
+      // patches it mid-run. Kept in the initial state so the React form can
+      // subscribe via `useCoAgent` without a narrowing guard.
+      scriptIngestProgress: null,
+      script_ingest_progress: null,
     }),
     [
       activeTeamSnapshot,

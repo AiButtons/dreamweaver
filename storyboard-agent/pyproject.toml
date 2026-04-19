@@ -9,10 +9,20 @@ dependencies = [
   "langgraph>=1.0.0,<2.0.0",
   "langgraph-cli[inmem]>=0.4.0",
   "langchain-core>=1.2.10,<2.0.0",
+  "langchain-google-genai>=2.0.0",
   "langgraph-checkpoint-postgres>=2.0.0",
   "psycopg[binary]>=3.2",
   "psycopg-pool>=3.2",
   "uvicorn==0.35.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.7.0",
+  "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
 ]
 
 [build-system]
@@ -20,5 +30,5 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["deep"]
-py-modules = ["agent", "linear_agent", "server"]
+packages = ["deep", "viMax_port", "viMax_port.tests"]
+py-modules = ["agent", "linear_agent", "server", "script_ingest_routes"]
