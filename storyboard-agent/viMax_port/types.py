@@ -106,3 +106,49 @@ class IngestionResult(BaseModel):
     pipelineDurationMs: int
     llmCallCount: int
     preprocessed: bool
+
+
+# ---------------------------------------------------------------------------
+# Novel2Video — M3 #3 intermediate + result schemas
+# ---------------------------------------------------------------------------
+
+
+class IngestedEpisode(BaseModel):
+    """A single episode's storyboard slice, scoped to its own narrative-git
+    branch within the parent storyboard. Mirrors IngestionResult's
+    per-episode fields while pinning the branch + title context."""
+
+    index: int  # 0-based within the series
+    title: str
+    branchId: str  # matches narrativeBranches.branchId for this episode
+    branchName: str
+    # Per-episode content — characters + portraits are shared at the
+    # storyboard level, so IngestedEpisode only carries the shot graph.
+    nodes: List[IngestedShotNode]
+    edges: List[IngestedEdge]
+    # Diagnostics
+    episodeDurationMs: int
+    llmCallCount: int
+    screenplayLength: int
+    preprocessed: bool
+
+
+class NovelIngestionResult(BaseModel):
+    """Top-level result of `ingest_novel`. Characters + portraits are
+    computed once against the aggregated narrative and reused across every
+    episode's branch, so they live at the top level. `episodes` holds the
+    per-branch shot graphs."""
+
+    storyboardId: str
+    novelLength: int
+    compressedNarrativeLength: int
+    chunkCount: int
+    # Shared across every episode:
+    characters: List[IngestedCharacter]
+    portraits: List[IngestedPortrait]
+    # One entry per episode, in order:
+    episodes: List[IngestedEpisode]
+    # Aggregate diagnostics:
+    pipelineDurationMs: int
+    llmCallCount: int
+    episodeCount: int
