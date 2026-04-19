@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Header, HTTPException
@@ -22,6 +23,28 @@ from viMax_port.idea_ingester import ingest_idea
 from viMax_port.novel_ingester import ingest_novel
 from viMax_port.screenplay_ingester import ingest_screenplay
 from viMax_port.types import IngestionResult, NovelIngestionResult
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _log_ingest_entry(
+    endpoint: str,
+    storyboard_id: str,
+    request_id: Optional[str],
+) -> None:
+    """Emit a structured log line at the top of each ingest handler so
+    operators can grep for the same requestId the Next.js route is
+    writing. Missing ids fall through as ``-`` so the field is still
+    searchable. Plain INFO level — the ingester itself logs finer-grained
+    stage events via the event_emitter callback.
+    """
+    _logger.info(
+        "ingest_entered endpoint=%s storyboardId=%s requestId=%s",
+        endpoint,
+        storyboard_id,
+        request_id or "-",
+    )
 
 
 router = APIRouter()
@@ -203,10 +226,12 @@ async def _run_with_event_stream(
 async def script_ingest_stream(
     payload: ScriptIngestRequest,
     authorization: Optional[str] = Header(default=None),
+    x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
 ) -> StreamingResponse:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer auth token")
     token = authorization.split(" ", 1)[1]
+    _log_ingest_entry("script-ingest-stream", payload.storyboardId, x_request_id)
 
     async def factory(emitter):
         return await ingest_screenplay(
@@ -234,10 +259,12 @@ async def script_ingest_stream(
 async def idea_ingest_stream(
     payload: IdeaIngestRequest,
     authorization: Optional[str] = Header(default=None),
+    x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
 ) -> StreamingResponse:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer auth token")
     token = authorization.split(" ", 1)[1]
+    _log_ingest_entry("idea-ingest-stream", payload.storyboardId, x_request_id)
 
     async def factory(emitter):
         return await ingest_idea(
@@ -303,10 +330,12 @@ async def novel_ingest(
 async def novel_ingest_stream(
     payload: NovelIngestRequest,
     authorization: Optional[str] = Header(default=None),
+    x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
 ) -> StreamingResponse:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer auth token")
     token = authorization.split(" ", 1)[1]
+    _log_ingest_entry("novel-ingest-stream", payload.storyboardId, x_request_id)
 
     async def factory(emitter):
         return await ingest_novel(

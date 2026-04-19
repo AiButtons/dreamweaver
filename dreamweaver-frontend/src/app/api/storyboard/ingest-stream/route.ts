@@ -36,6 +36,7 @@ import {
   type PostProcessEmit,
   type PythonIngestionResult,
 } from "@/lib/ingest-postprocess";
+import { createLogger, resolveRequestId } from "@/lib/observability";
 
 export const runtime = "nodejs";
 // 15 minutes — idea mode chains two extra LLM passes (develop_story +
@@ -66,11 +67,17 @@ interface IngestStreamBody {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  // Request correlation — every log line + SSE event + Python sub-call
+  // carries the same id so operators can grep a full run across services.
+  const requestId = resolveRequestId(request.headers);
+  const log = createLogger({ service: "ingest-stream", requestId });
+
   const token = await getToken();
   if (!token) {
+    log.warn("unauthorized", { reason: "no_session_token" });
     return new Response(
       sseFrame("error", { message: "Unauthorized" }),
-      { status: 401, headers: { "Content-Type": "text/event-stream" } },
+      { status: 401, headers: { "Content-Type": "text/event-stream", "x-request-id": requestId } },
     );
   }
 
@@ -155,7 +162,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       let ingestSucceeded = false;
 
       try {
-        send("open", { ok: true, mode });
+        // Echo the request id in the SSE handshake so the client (and
+        // downstream log shipping) can correlate this stream.
+        send("open", { ok: true, mode, requestId });
+        log.info("ingest_started", {
+          mode,
+          titleLength: title.length,
+          payloadLength: payloadText.length,
+        });
 
         // 1. Create storyboard.
         send("stage", {
@@ -170,8 +184,10 @@ export async function POST(request: NextRequest): Promise<Response> {
             { title, mode: "agent_draft" },
           )) as string;
           createdStoryboardId = storyboardId;
+          log.info("storyboard_created", { storyboardId });
         } catch (err) {
           const msg = err instanceof Error ? err.message : "createStoryboard failed";
+          log.error("create_storyboard_failed", { error: msg });
           send("error", { message: msg });
           return;
         }
@@ -193,6 +209,9 @@ export async function POST(request: NextRequest): Promise<Response> {
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
+              // Thread the id into the storyboard-agent so its logs
+              // correlate with this route's logs for an end-to-end trace.
+              "X-Request-Id": requestId,
             },
             body: JSON.stringify(pythonBody),
             signal: pythonAbort.signal,
@@ -309,8 +328,22 @@ export async function POST(request: NextRequest): Promise<Response> {
         // node landed; a storyboard with 0 nodes is still useless to the
         // producer.
         ingestSucceeded = outcome.nodeCount > 0;
+        log.info("ingest_completed", {
+          storyboardId,
+          nodeCount: outcome.nodeCount,
+          edgeCount: outcome.edgeCount,
+          characterCount: outcome.characterCount,
+          portraitCount: outcome.portraitCount,
+          portraitFailureCount: outcome.portraitFailures.length,
+          totalDurationMs,
+          pipelineDurationMs: pythonResult.pipelineDurationMs,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        log.error("ingest_failed", {
+          error: msg,
+          createdStoryboardId: createdStoryboardId ?? undefined,
+        });
         send("error", { message: msg });
       } finally {
         clearInterval(heartbeat);
@@ -323,8 +356,14 @@ export async function POST(request: NextRequest): Promise<Response> {
             await client.mutation(mutationRef("storyboards:trashStoryboard"), {
               storyboardId: createdStoryboardId as Id<"storyboards">,
             });
-          } catch {
-            // ignore — nothing actionable the user can do about this
+            log.warn("orphan_storyboard_trashed", {
+              storyboardId: createdStoryboardId,
+            });
+          } catch (trashErr) {
+            log.warn("orphan_trash_failed", {
+              storyboardId: createdStoryboardId,
+              error: trashErr instanceof Error ? trashErr.message : String(trashErr),
+            });
           }
         }
         close();
@@ -339,6 +378,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      "X-Request-Id": requestId,
     },
   });
 }

@@ -20,6 +20,7 @@
 import { NextRequest } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { Id } from "../../../../../convex/_generated/dataModel";
+import { createLogger, resolveRequestId } from "@/lib/observability";
 import { getToken } from "@/lib/auth-server";
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import {
@@ -78,6 +79,9 @@ interface PythonNovelResult {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  const requestId = resolveRequestId(request.headers);
+  const log = createLogger({ service: "ingest-novel-stream", requestId });
+
   const token = await getToken();
   if (!token) {
     return new Response(sseFrame("error", { message: "Unauthorized" }), {
@@ -161,7 +165,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       let ingestSucceeded = false;
 
       try {
-        send("open", { ok: true, mode: "novel" });
+        send("open", { ok: true, mode: "novel", requestId });
+        log.info("ingest_started", { mode: "novel" });
 
         // 1. Create storyboard.
         send("stage", {
@@ -192,6 +197,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
+              "X-Request-Id": requestId,
             },
             body: JSON.stringify({
               storyboardId,
@@ -605,6 +611,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      "X-Request-Id": requestId,
     },
   });
 }
