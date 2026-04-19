@@ -1,31 +1,66 @@
 "use client";
 
+import { useState } from "react";
+import { ChevronsUp } from "lucide-react";
 import type {
   NarrativeBranchRecord,
   NarrativeCommitRecord,
   SimulationCriticRunRecord,
 } from "@/app/storyboard/types";
+import { CUT_TIER_LABELS, CUT_TIER_OPTIONS } from "@/app/storyboard/types";
+import { formatReviewRound, nextCutTier, type CutTier } from "@/lib/cut-tier";
+import { CherryPickDialog } from "./CherryPickDialog";
 
 type TimelineTheaterPanelProps = {
   simulationRuns: SimulationCriticRunRecord[];
   branches: NarrativeBranchRecord[];
   commits: NarrativeCommitRecord[];
+  storyboardId: string;
   onRunCritic: () => Promise<void>;
   onCreateBranch: () => Promise<void>;
-  onCherryPickLatest: () => Promise<void>;
+  onCherryPickCommit: (sourceCommitId: string, targetBranchId: string) => Promise<void>;
   onComputeLatestDiff: () => Promise<void>;
+  onSetBranchCutTier?: (branchId: string, cutTier: CutTier) => Promise<void>;
+  onSetCommitReviewRound?: (commitId: string, reviewRound?: number) => Promise<void>;
+  onBumpBranchHeadReviewRound?: (branchId: string) => Promise<void>;
+};
+
+const TONE_CLASSES: Record<
+  "muted" | "info" | "violet" | "amber" | "emerald" | "sky" | "success",
+  string
+> = {
+  muted: "border-slate-500/40 bg-slate-500/10 text-slate-200",
+  info: "border-sky-500/40 bg-sky-500/10 text-sky-200",
+  violet: "border-violet-500/40 bg-violet-500/10 text-violet-200",
+  amber: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  sky: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200",
+  success: "border-green-500/40 bg-green-500/10 text-green-200",
+};
+
+const getTierTone = (tier: CutTier): keyof typeof TONE_CLASSES => {
+  const entry = CUT_TIER_OPTIONS.find((option) => option.value === tier);
+  return entry?.tone ?? "muted";
 };
 
 export function TimelineTheaterPanel({
   simulationRuns,
   branches,
   commits,
+  storyboardId,
   onRunCritic,
   onCreateBranch,
-  onCherryPickLatest,
+  onCherryPickCommit,
   onComputeLatestDiff,
+  onSetBranchCutTier,
+  onBumpBranchHeadReviewRound,
 }: TimelineTheaterPanelProps) {
+  const [cherryPickOpen, setCherryPickOpen] = useState(false);
   const rows = simulationRuns.slice(0, 6);
+  const defaultBranch = branches.find((branch) => branch.isDefault) ?? null;
+  const branchRows = branches.slice(0, 6);
+  const commitRows = commits.slice(0, 6);
+
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-950/95 text-zinc-100 p-4">
       <div className="flex items-center justify-between">
@@ -52,9 +87,9 @@ export function TimelineTheaterPanel({
         <button
           type="button"
           className="rounded bg-violet-700 px-2 py-1 text-[10px]"
-          onClick={() => void onCherryPickLatest()}
+          onClick={() => setCherryPickOpen(true)}
         >
-          Cherry-pick Latest
+          Cherry-pick…
         </button>
         <button
           type="button"
@@ -67,6 +102,93 @@ export function TimelineTheaterPanel({
       <p className="mt-2 text-[11px] text-zinc-500">
         Branches: {branches.length} • Commits: {commits.length}
       </p>
+
+      {branchRows.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-zinc-500">Branches</p>
+          {branchRows.map((branch) => {
+            const tier = branch.cutTier;
+            const tone = tier ? getTierTone(tier) : null;
+            const label = tier ? CUT_TIER_LABELS[tier] : "No tier";
+            const nextTier = nextCutTier(tier);
+            const promoteDisabled = !nextTier || !onSetBranchCutTier;
+            return (
+              <div
+                key={branch._id}
+                className="flex items-center gap-2 rounded border border-zinc-800 px-2 py-1"
+              >
+                <span className="truncate text-[11px] font-medium">
+                  {branch.name}
+                  {branch.isDefault ? (
+                    <span className="ml-1 text-[10px] text-zinc-500">(default)</span>
+                  ) : null}
+                </span>
+                <span
+                  className={
+                    "ml-auto rounded-full border px-1.5 py-0.5 text-[10px] " +
+                    (tone ? TONE_CLASSES[tone] : "border-zinc-700 text-zinc-400")
+                  }
+                >
+                  {label}
+                </span>
+                <button
+                  type="button"
+                  disabled={promoteDisabled}
+                  title={nextTier ? `Promote to ${CUT_TIER_LABELS[nextTier]}` : "At top tier"}
+                  className="inline-flex items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-200 disabled:opacity-40"
+                  onClick={() => {
+                    if (!onSetBranchCutTier || !nextTier) return;
+                    void onSetBranchCutTier(branch.branchId, nextTier);
+                  }}
+                >
+                  <ChevronsUp className="size-3" />
+                  Promote
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {commitRows.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-zinc-500">Recent Commits</p>
+          {commitRows.map((commit) => {
+            const rLabel = formatReviewRound(commit.reviewRound);
+            const isDefaultHead =
+              !!defaultBranch
+              && defaultBranch.headCommitId === commit.commitId
+              && commit.branchId === defaultBranch.branchId;
+            return (
+              <div
+                key={commit._id}
+                className="flex items-center gap-2 rounded border border-zinc-800 px-2 py-1"
+              >
+                <span className="truncate text-[11px]">{commit.summary}</span>
+                {rLabel ? (
+                  <span className="ml-auto rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200">
+                    {rLabel}
+                  </span>
+                ) : (
+                  <span className="ml-auto text-[10px] text-zinc-600">—</span>
+                )}
+                {isDefaultHead && onBumpBranchHeadReviewRound ? (
+                  <button
+                    type="button"
+                    className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-200"
+                    onClick={() => {
+                      void onBumpBranchHeadReviewRound(defaultBranch.branchId);
+                    }}
+                  >
+                    Bump R#
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       {rows.length === 0 ? (
         <p className="mt-2 text-[11px] text-zinc-400">No simulation runs yet.</p>
       ) : (
@@ -84,6 +206,13 @@ export function TimelineTheaterPanel({
           ))}
         </div>
       )}
+      <CherryPickDialog
+        open={cherryPickOpen}
+        onOpenChange={setCherryPickOpen}
+        storyboardId={storyboardId}
+        branches={branches}
+        onCherryPick={onCherryPickCommit}
+      />
     </section>
   );
 }

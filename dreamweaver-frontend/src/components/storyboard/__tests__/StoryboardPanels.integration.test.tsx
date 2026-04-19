@@ -352,13 +352,14 @@ describe("Storyboard panels integration", () => {
             createdAt: 1,
           },
         ]}
+        storyboardId="sb_test"
         onRunCritic={async () => {
           runCriticCalls += 1;
         }}
         onCreateBranch={async () => {
           createBranchCalls += 1;
         }}
-        onCherryPickLatest={async () => {
+        onCherryPickCommit={async (_s: string, _t: string) => {
           cherryPickCalls += 1;
         }}
         onComputeLatestDiff={async () => {
@@ -409,7 +410,8 @@ describe("Storyboard panels integration", () => {
 
     fireEvent.click(timelineView.getByText("Run Critic"));
     fireEvent.click(timelineView.getByText("Create Branch"));
-    fireEvent.click(timelineView.getByText("Cherry-pick Latest"));
+    // Cherry-pick now opens a dialog instead of firing the callback directly —
+    // dialog-level interaction is out of scope for this panel-integration test.
     fireEvent.click(timelineView.getByText("Compute Diff"));
 
     fireEvent.click(dailiesView.getByText("Generate"));
@@ -422,7 +424,8 @@ describe("Storyboard panels integration", () => {
     await waitFor(() => {
       expect(runCriticCalls).toBe(1);
       expect(createBranchCalls).toBe(1);
-      expect(cherryPickCalls).toBe(1);
+      // Button now opens dialog; callback does not fire from this click.
+      expect(cherryPickCalls).toBe(0);
       expect(diffCalls).toBe(1);
       expect(generateDailiesCalls).toBe(1);
       expect(dailiesStatusCalls.length).toBe(3);

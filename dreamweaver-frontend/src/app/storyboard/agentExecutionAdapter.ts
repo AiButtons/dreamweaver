@@ -1,4 +1,4 @@
-import type { PlanOperation, RuntimeResolvedTeam, StoryEdge, StoryNode } from "./types";
+import type { PlanOperation, RuntimeResolvedTeam, ShotMeta, StoryEdge, StoryNode } from "./types";
 
 type GraphPatchOperation = {
   op:
@@ -20,6 +20,7 @@ type GraphPatchOperation = {
   branchId?: string;
   order?: number;
   isPrimary?: boolean;
+  shotMeta?: ShotMeta;
 };
 
 type GraphPatchInput = {
@@ -482,6 +483,9 @@ const sanitizeOperations = (
       branchId: asOptionalString(operation.branchId),
       order: typeof operation.order === "number" ? operation.order : undefined,
       isPrimary: typeof operation.isPrimary === "boolean" ? operation.isPrimary : undefined,
+      shotMeta: isObject(operation.shotMeta)
+        ? (operation.shotMeta as ShotMeta)
+        : undefined,
     }))
     .filter((operation) =>
       [

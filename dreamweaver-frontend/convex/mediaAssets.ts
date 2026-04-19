@@ -1,7 +1,39 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { ensureStoryboardEditable, requireUser } from "./storyboardAccess";
 import { recomputeStoryboardStatsInternal } from "./storyboardStats";
+
+// Shared validators for delivery-variant surface. Keep the literals in sync
+// with the matching blocks in `convex/schema.ts` for the `mediaAssets` table.
+const deliveryVariantSpecValidator = v.object({
+  aspect: v.optional(v.union(
+    v.literal("2.39:1"), v.literal("1.85:1"), v.literal("16:9"),
+    v.literal("9:16"), v.literal("4:5"), v.literal("1:1"), v.literal("2:1"),
+  )),
+  durationS: v.optional(v.number()),
+  locale: v.optional(v.string()),
+  abLabel: v.optional(v.string()),
+  platform: v.optional(v.union(
+    v.literal("meta"), v.literal("tiktok"), v.literal("youtube"),
+    v.literal("ctv"), v.literal("dv360"), v.literal("x"),
+    v.literal("linkedin"), v.literal("other"),
+  )),
+  endCard: v.optional(v.string()),
+  notes: v.optional(v.string()),
+});
+
+const deliveryStatusValidator = v.union(
+  v.literal("planned"), v.literal("in_review"),
+  v.literal("approved"), v.literal("delivered"), v.literal("archived"),
+);
+
+// Hard ceiling on cartesian expansion. Mirrors
+// `MATRIX_MAX_ROWS` in `src/lib/delivery-matrix/expand.ts`; the shared
+// `expandVariantMatrix` in that file carries the canonical algorithm and
+// test coverage. We re-implement the math inline here because Convex
+// functions can't reliably import from `src/` at build time.
+const DELIVERY_MATRIX_MAX_ROWS = 500;
 
 // Pending media generations older than this are considered zombies and flipped to
 // "failed" by the sweeper. LTX-2.3 video can take ~15min end-to-end; 30min gives
@@ -443,6 +475,37 @@ export const updateConsistencyScores = mutation({
   },
 });
 
+/**
+ * Review take-status control. Passing `takeStatus: undefined` clears it.
+ * Auth-guarded via the asset's owning storyboardId — any user with
+ * storyboard-edit access may set the status (review notes aren't scoped to
+ * the original author).
+ */
+export const setTakeStatus = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+    takeStatus: v.optional(v.union(
+      v.literal("print"),
+      v.literal("hold"),
+      v.literal("ng"),
+      v.literal("noted"),
+    )),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const asset = await ctx.db.get(args.mediaAssetId);
+    if (!asset) {
+      throw new ConvexError("Media asset not found");
+    }
+    await ensureStoryboardEditable(ctx, asset.storyboardId, userId);
+    await ctx.db.patch(args.mediaAssetId, {
+      takeStatus: args.takeStatus,
+      updatedAt: Date.now(),
+    });
+    return args.mediaAssetId;
+  },
+});
+
 export const listNodeMedia = query({
   args: {
     storyboardId: v.id("storyboards"),
@@ -465,5 +528,415 @@ export const listNodeMedia = query({
       return mediaRows;
     }
     return mediaRows.filter((row) => row.kind === args.kind);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Delivery-variant surface (Enhancement #3: variant matrix)
+// ---------------------------------------------------------------------------
+// A "variant" is a row in `mediaAssets` with `masterAssetId` set. Masters are
+// rows where `masterAssetId` is absent. Variants never appear in the node's
+// media.images[] / media.videos[] arrays — the node surface tracks masters
+// only. Variants are fetched on-demand via `listVariantsForMaster` using the
+// `by_master_createdAt` index.
+
+/**
+ * Create a single delivery variant for a given master asset. The caller may
+ * optionally provide a `sourceUrl` (e.g. the output of a manual reformat
+ * step); in that case the new row is inserted directly in `completed` +
+ * `in_review` state. Otherwise it lands as `pending` + `planned` and the UI
+ * can later call `attachVariantSource` once the variant asset is produced.
+ *
+ * The storyboard node's media arrays are intentionally NOT patched — variants
+ * live outside the master timeline.
+ */
+export const createDeliveryVariant = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    masterAssetId: v.id("mediaAssets"),
+    variantSpec: deliveryVariantSpecValidator,
+    sourceUrl: v.optional(v.string()),
+    modelId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const master = await ctx.db.get(args.masterAssetId);
+    if (!master) {
+      throw new ConvexError("Master asset not found");
+    }
+    if (master.storyboardId !== args.storyboardId) {
+      throw new ConvexError("Master asset does not belong to this storyboard");
+    }
+    if (master.masterAssetId !== undefined) {
+      throw new ConvexError("Cannot attach a variant to another variant");
+    }
+
+    const now = Date.now();
+    const hasSource = args.sourceUrl !== undefined && args.sourceUrl.length > 0;
+    const assetId = await ctx.db.insert("mediaAssets", {
+      storyboardId: args.storyboardId,
+      userId,
+      nodeId: master.nodeId,
+      kind: master.kind,
+      sourceUrl: args.sourceUrl ?? "",
+      modelId: args.modelId ?? master.modelId,
+      prompt: master.prompt,
+      status: hasSource ? "completed" : "pending",
+      masterAssetId: args.masterAssetId,
+      variantSpec: args.variantSpec,
+      deliveryStatus: hasSource ? "in_review" : "planned",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return assetId;
+  },
+});
+
+/**
+ * Cartesian-expand a matrix input into delivery-variant rows. The server-side
+ * math mirrors `expandVariantMatrix` in `src/lib/delivery-matrix/expand.ts`
+ * — see that file (+ its test suite) for canonical coverage of ordering and
+ * the 500-row cap. Inlined here because Convex functions cannot import from
+ * `src/` at build time.
+ */
+export const createDeliveryVariantMatrix = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    masterAssetId: v.id("mediaAssets"),
+    matrix: v.object({
+      aspects: v.optional(v.array(v.union(
+        v.literal("2.39:1"), v.literal("1.85:1"), v.literal("16:9"),
+        v.literal("9:16"), v.literal("4:5"), v.literal("1:1"), v.literal("2:1"),
+      ))),
+      durationsS: v.optional(v.array(v.number())),
+      locales: v.optional(v.array(v.string())),
+      abLabels: v.optional(v.array(v.string())),
+      platform: v.optional(v.union(
+        v.literal("meta"), v.literal("tiktok"), v.literal("youtube"),
+        v.literal("ctv"), v.literal("dv360"), v.literal("x"),
+        v.literal("linkedin"), v.literal("other"),
+      )),
+      endCard: v.optional(v.string()),
+      notes: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const master = await ctx.db.get(args.masterAssetId);
+    if (!master) {
+      throw new ConvexError("Master asset not found");
+    }
+    if (master.storyboardId !== args.storyboardId) {
+      throw new ConvexError("Master asset does not belong to this storyboard");
+    }
+    if (master.masterAssetId !== undefined) {
+      throw new ConvexError("Cannot attach a variant to another variant");
+    }
+
+    const aspects = args.matrix.aspects && args.matrix.aspects.length > 0
+      ? args.matrix.aspects.map((a) => a as string | undefined)
+      : [undefined];
+    const durations = args.matrix.durationsS && args.matrix.durationsS.length > 0
+      ? args.matrix.durationsS.map((d) => d as number | undefined)
+      : [undefined];
+    const locales = args.matrix.locales && args.matrix.locales.length > 0
+      ? args.matrix.locales.map((l) => l as string | undefined)
+      : [undefined];
+    const abLabels = args.matrix.abLabels && args.matrix.abLabels.length > 0
+      ? args.matrix.abLabels.map((l) => l as string | undefined)
+      : [undefined];
+
+    const total = aspects.length * durations.length * locales.length * abLabels.length;
+    if (total > DELIVERY_MATRIX_MAX_ROWS) {
+      throw new ConvexError(
+        `Delivery matrix would produce ${total} variants; cap is ${DELIVERY_MATRIX_MAX_ROWS}.`,
+      );
+    }
+
+    const now = Date.now();
+    const createdIds: Id<"mediaAssets">[] = [];
+    // Canonical iteration order: aspect (outer) > duration > locale > abLabel.
+    for (const aspect of aspects) {
+      for (const durationS of durations) {
+        for (const locale of locales) {
+          for (const abLabel of abLabels) {
+            const spec: {
+              aspect?: "2.39:1" | "1.85:1" | "16:9" | "9:16" | "4:5" | "1:1" | "2:1";
+              durationS?: number;
+              locale?: string;
+              abLabel?: string;
+              platform?: "meta" | "tiktok" | "youtube" | "ctv" | "dv360" | "x" | "linkedin" | "other";
+              endCard?: string;
+              notes?: string;
+            } = {};
+            if (aspect !== undefined) {
+              spec.aspect = aspect as typeof spec.aspect;
+            }
+            if (durationS !== undefined) spec.durationS = durationS;
+            if (locale !== undefined) spec.locale = locale;
+            if (abLabel !== undefined) spec.abLabel = abLabel;
+            if (args.matrix.platform !== undefined) spec.platform = args.matrix.platform;
+            if (args.matrix.endCard !== undefined) spec.endCard = args.matrix.endCard;
+            if (args.matrix.notes !== undefined) spec.notes = args.matrix.notes;
+
+            const id = await ctx.db.insert("mediaAssets", {
+              storyboardId: args.storyboardId,
+              userId,
+              nodeId: master.nodeId,
+              kind: master.kind,
+              sourceUrl: "",
+              modelId: master.modelId,
+              prompt: master.prompt,
+              status: "pending",
+              masterAssetId: args.masterAssetId,
+              variantSpec: spec,
+              deliveryStatus: "planned",
+              createdAt: now,
+              updatedAt: now,
+            });
+            createdIds.push(id);
+          }
+        }
+      }
+    }
+    return { createdIds };
+  },
+});
+
+/**
+ * Patch a variant's `variantSpec`. Errors if the target is a master (i.e. has
+ * no `masterAssetId`).
+ */
+export const updateDeliveryVariantSpec = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+    variantSpec: deliveryVariantSpecValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const asset = await ctx.db.get(args.mediaAssetId);
+    if (!asset) {
+      throw new ConvexError("Media asset not found");
+    }
+    if (asset.masterAssetId === undefined) {
+      throw new ConvexError("Target is a master, not a variant");
+    }
+    await ensureStoryboardEditable(ctx, asset.storyboardId, userId);
+    await ctx.db.patch(args.mediaAssetId, {
+      variantSpec: args.variantSpec,
+      updatedAt: Date.now(),
+    });
+    return args.mediaAssetId;
+  },
+});
+
+/**
+ * Patch the delivery lifecycle status on a variant.
+ */
+export const updateDeliveryVariantStatus = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+    deliveryStatus: deliveryStatusValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const asset = await ctx.db.get(args.mediaAssetId);
+    if (!asset) {
+      throw new ConvexError("Media asset not found");
+    }
+    if (asset.masterAssetId === undefined) {
+      throw new ConvexError("Target is a master, not a variant");
+    }
+    await ensureStoryboardEditable(ctx, asset.storyboardId, userId);
+    await ctx.db.patch(args.mediaAssetId, {
+      deliveryStatus: args.deliveryStatus,
+      updatedAt: Date.now(),
+    });
+    return args.mediaAssetId;
+  },
+});
+
+/**
+ * Attach a source URL to a pending variant — the typical "manual reformat
+ * just landed" flow. Flips `status` pending -> completed and `deliveryStatus`
+ * planned -> in_review.
+ */
+export const attachVariantSource = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+    sourceUrl: v.string(),
+    modelId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const asset = await ctx.db.get(args.mediaAssetId);
+    if (!asset) {
+      throw new ConvexError("Media asset not found");
+    }
+    if (asset.masterAssetId === undefined) {
+      throw new ConvexError("Target is a master, not a variant");
+    }
+    await ensureStoryboardEditable(ctx, asset.storyboardId, userId);
+    const patch: Record<string, unknown> = {
+      sourceUrl: args.sourceUrl,
+      updatedAt: Date.now(),
+    };
+    if (args.modelId !== undefined) patch.modelId = args.modelId;
+    if (asset.status === "pending") patch.status = "completed";
+    if (asset.deliveryStatus === "planned") patch.deliveryStatus = "in_review";
+    await ctx.db.patch(args.mediaAssetId, patch);
+    return args.mediaAssetId;
+  },
+});
+
+/**
+ * Archive a variant. Sets `deliveryStatus` to "archived" and flips the
+ * generation `status` to "rolled_back" so any listing that filters on
+ * non-terminal statuses (e.g. review queues) drops it. The row stays around
+ * for audit.
+ */
+export const archiveDeliveryVariant = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const asset = await ctx.db.get(args.mediaAssetId);
+    if (!asset) {
+      throw new ConvexError("Media asset not found");
+    }
+    if (asset.masterAssetId === undefined) {
+      throw new ConvexError("Target is a master, not a variant");
+    }
+    await ensureStoryboardEditable(ctx, asset.storyboardId, userId);
+    await ctx.db.patch(args.mediaAssetId, {
+      deliveryStatus: "archived",
+      status: "rolled_back",
+      updatedAt: Date.now(),
+    });
+    return args.mediaAssetId;
+  },
+});
+
+/**
+ * Atomically swap a variant with its master. The variant becomes the new
+ * master (its variant fields clear); the former master becomes a demoted
+ * variant with an empty spec and `deliveryStatus: "archived"` so it doesn't
+ * pollute the UI. The owning node's media.images[]/videos[] + active pointers
+ * are retargeted so downstream UI continues to resolve the new master.
+ */
+export const promoteVariantToMaster = mutation({
+  args: {
+    mediaAssetId: v.id("mediaAssets"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const variant = await ctx.db.get(args.mediaAssetId);
+    if (!variant) {
+      throw new ConvexError("Media asset not found");
+    }
+    if (variant.masterAssetId === undefined) {
+      throw new ConvexError("Target is already a master");
+    }
+    await ensureStoryboardEditable(ctx, variant.storyboardId, userId);
+
+    const formerMasterId = variant.masterAssetId;
+    const formerMaster = await ctx.db.get(formerMasterId);
+    if (!formerMaster) {
+      throw new ConvexError("Former master not found");
+    }
+
+    const now = Date.now();
+    // Promote the variant: clear the three variant-scoped fields so it looks
+    // like a plain master. We can't delete fields on patch, so pass
+    // `undefined` — Convex drops optional fields set to undefined.
+    await ctx.db.patch(args.mediaAssetId, {
+      masterAssetId: undefined,
+      variantSpec: undefined,
+      deliveryStatus: undefined,
+      updatedAt: now,
+    });
+    // Demote the old master: point it at the new master, tag with an empty
+    // spec so it passes variant-only guards, and archive it.
+    await ctx.db.patch(formerMasterId, {
+      masterAssetId: args.mediaAssetId,
+      variantSpec: {},
+      deliveryStatus: "archived",
+      updatedAt: now,
+    });
+
+    // Retarget the node's media arrays / active pointers.
+    const node = await ctx.db
+      .query("storyboardNodes")
+      .withIndex("by_storyboard_node", (q) =>
+        q.eq("storyboardId", variant.storyboardId).eq("nodeId", variant.nodeId),
+      )
+      .unique();
+    if (node) {
+      const swap = <T extends { mediaAssetId: Id<"mediaAssets"> }>(arr: T[]): T[] =>
+        arr.map((entry) =>
+          entry.mediaAssetId === formerMasterId
+            ? { ...entry, mediaAssetId: args.mediaAssetId, url: variant.sourceUrl || entry.url, modelId: variant.modelId || entry.modelId }
+            : entry,
+        );
+      const nextImages = variant.kind === "image" ? swap(node.media.images) : node.media.images;
+      const nextVideos = variant.kind === "video" ? swap(node.media.videos) : node.media.videos;
+      const nextActiveImage =
+        node.media.activeImageId === formerMasterId ? args.mediaAssetId : node.media.activeImageId;
+      const nextActiveVideo =
+        node.media.activeVideoId === formerMasterId ? args.mediaAssetId : node.media.activeVideoId;
+      await ctx.db.patch(node._id, {
+        media: {
+          images: nextImages,
+          videos: nextVideos,
+          activeImageId: nextActiveImage,
+          activeVideoId: nextActiveVideo,
+        },
+        updatedAt: now,
+      });
+    }
+
+    return { newMasterId: args.mediaAssetId, demotedMasterId: formerMasterId };
+  },
+});
+
+/**
+ * List variants of a given master. Archived variants are excluded by default
+ * — pass `includeArchived: true` to see them (typically for audit views).
+ */
+export const listVariantsForMaster = query({
+  args: {
+    storyboardId: v.id("storyboards"),
+    masterAssetId: v.id("mediaAssets"),
+    includeArchived: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const rows = await ctx.db
+      .query("mediaAssets")
+      .withIndex("by_master_createdAt", (q) => q.eq("masterAssetId", args.masterAssetId))
+      .order("asc")
+      .collect();
+    const includeArchived = args.includeArchived ?? false;
+    return rows
+      .filter((row) => row.storyboardId === args.storyboardId)
+      .filter((row) => includeArchived || row.deliveryStatus !== "archived")
+      .map((row) => ({
+        id: row._id,
+        masterAssetId: row.masterAssetId!,
+        kind: row.kind,
+        sourceUrl: row.sourceUrl,
+        modelId: row.modelId,
+        generationStatus: row.status,
+        deliveryStatus: row.deliveryStatus ?? "planned",
+        variantSpec: row.variantSpec ?? {},
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }));
   },
 });

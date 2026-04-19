@@ -1,16 +1,40 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useQuery } from "convex/react";
 
-import type { ConstraintBundle } from "@/app/storyboard/types";
+import type { ConstraintBundle, IdentityReferenceRecord, PortraitView } from "@/app/storyboard/types";
+import {
+  orderPortraitsCanonically,
+  PORTRAIT_VIEW_OPTIONS,
+  portraitSetStatus,
+} from "@/lib/identity-portraits";
+import { queryRef } from "@/lib/convexRefs";
 
 type ViolationStatus = "acknowledged" | "resolved";
+
+type IdentityPortraitCallbacks = {
+  addPortrait: (input: {
+    storyboardId: string;
+    ownerPackId: string;
+    portraitView: PortraitView;
+    sourceUrl: string;
+    notes?: string;
+  }) => Promise<void>;
+  removePortrait: (input: { referenceId: string }) => Promise<void>;
+};
 
 type ContinuityOSPanelProps = {
   bundle: ConstraintBundle | null;
   onDetectContradictions: () => Promise<void>;
+  onRunShotValidators?: () => Promise<void>;
   onResolveViolation?: (violationId: string, status: ViolationStatus) => Promise<void>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  // Portrait surface wiring (#7). Both need to be provided together for the
+  // "Reference portraits" section to show its edit affordances; if either is
+  // missing the section renders in read-only mode.
+  storyboardId?: string;
+  identityPortraitCallbacks?: IdentityPortraitCallbacks;
 };
 
 type TabKey = "identity" | "constraints" | "violations";
@@ -27,8 +51,11 @@ const asBool = (value: unknown, fallback = false): boolean =>
 export function ContinuityOSPanel({
   bundle,
   onDetectContradictions,
+  onRunShotValidators,
   onResolveViolation,
   onPublishIdentityPack,
+  storyboardId,
+  identityPortraitCallbacks,
 }: ContinuityOSPanelProps) {
   const identityPacks = bundle?.identityPacks ?? [];
   const globalConstraints = bundle?.globalConstraints ?? [];
@@ -45,13 +72,23 @@ export function ContinuityOSPanel({
           <p className="text-[11px] uppercase tracking-wide text-zinc-400">Continuity OS</p>
           <h3 className="mt-1 text-sm font-semibold">DNA + Constraints</h3>
         </div>
-        <button
-          type="button"
-          className="rounded bg-zinc-800 px-2 py-1 text-xs"
-          onClick={() => void onDetectContradictions()}
-        >
-          Detect
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded bg-zinc-800 px-2 py-1 text-xs"
+            onClick={() => void onDetectContradictions()}
+          >
+            Detect
+          </button>
+          <button
+            type="button"
+            className="rounded bg-zinc-800 px-2 py-1 text-xs disabled:opacity-50"
+            onClick={() => onRunShotValidators && void onRunShotValidators()}
+            disabled={!onRunShotValidators}
+          >
+            Validate shots
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
@@ -77,6 +114,8 @@ export function ContinuityOSPanel({
           <IdentityPacksView
             packs={identityPacks}
             onPublishIdentityPack={onPublishIdentityPack}
+            storyboardId={storyboardId}
+            identityPortraitCallbacks={identityPortraitCallbacks}
           />
         ) : null}
         {tab === "constraints" ? (
@@ -127,9 +166,13 @@ function TabButton({
 function IdentityPacksView({
   packs,
   onPublishIdentityPack,
+  storyboardId,
+  identityPortraitCallbacks,
 }: {
   packs: Array<Record<string, unknown>>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  storyboardId?: string;
+  identityPortraitCallbacks?: IdentityPortraitCallbacks;
 }) {
   if (packs.length === 0) {
     return <p className="text-[11px] text-zinc-500">No identity packs yet.</p>;
@@ -141,6 +184,8 @@ function IdentityPacksView({
           key={asString(pack.packId, `pack_${index}`)}
           pack={pack}
           onPublishIdentityPack={onPublishIdentityPack}
+          storyboardId={storyboardId}
+          identityPortraitCallbacks={identityPortraitCallbacks}
         />
       ))}
     </>
@@ -150,11 +195,16 @@ function IdentityPacksView({
 function IdentityPackRow({
   pack,
   onPublishIdentityPack,
+  storyboardId,
+  identityPortraitCallbacks,
 }: {
   pack: Record<string, unknown>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  storyboardId?: string;
+  identityPortraitCallbacks?: IdentityPortraitCallbacks;
 }) {
   const packId = asString(pack.packId);
+  const packRowId = asString(pack._id);
   const name = asString(pack.name, packId || "Identity Pack");
   const description = asString(pack.description);
   const visibility = asString(pack.visibility, "project");
@@ -162,6 +212,7 @@ function IdentityPackRow({
   const sourceCharacterId = asString(pack.sourceCharacterId);
   const dnaJson = asString(pack.dnaJson);
   const [expanded, setExpanded] = useState(false);
+  const [portraitsExpanded, setPortraitsExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const dnaPreview = useMemo(() => {
@@ -222,6 +273,280 @@ function IdentityPackRow({
           {dnaPreview}
         </pre>
       ) : null}
+
+      {/* Reference portraits collapsible. Only mounts its useQuery subtree
+          when the row is expanded, so the drawer's Identity tab stays
+          lightweight on first open. */}
+      {packRowId ? (
+        <div className="mt-2 border-t border-zinc-800 pt-2">
+          <button
+            type="button"
+            className="text-[10px] text-zinc-400 underline underline-offset-2"
+            onClick={() => setPortraitsExpanded((prev) => !prev)}
+          >
+            {portraitsExpanded ? "Hide reference portraits" : "Reference portraits"}
+          </button>
+          {portraitsExpanded ? (
+            <ReferencePortraitsSection
+              storyboardId={storyboardId}
+              packRowId={packRowId}
+              callbacks={identityPortraitCallbacks}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReferencePortraitsSection({
+  storyboardId,
+  packRowId,
+  callbacks,
+}: {
+  storyboardId?: string;
+  packRowId: string;
+  callbacks?: IdentityPortraitCallbacks;
+}) {
+  // Skip the query entirely until we know which storyboard this row belongs
+  // to. Convex `useQuery` treats `"skip"` as "don't subscribe", so the
+  // section renders a gentle empty state instead of querying against an
+  // empty id.
+  const portraits = useQuery(
+    queryRef("identityReferences:listIdentityPortraitsForPack"),
+    storyboardId
+      ? { storyboardId, ownerPackId: packRowId }
+      : "skip",
+  ) as IdentityReferenceRecord[] | undefined;
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [viewDraft, setViewDraft] = useState<PortraitView>("front");
+  const [urlDraft, setUrlDraft] = useState("");
+  const [notesDraft, setNotesDraft] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const ordered = useMemo(
+    () => (portraits ? orderPortraitsCanonically(portraits) : []),
+    [portraits],
+  );
+  const status = useMemo(
+    () => portraitSetStatus(portraits ?? []),
+    [portraits],
+  );
+
+  if (!storyboardId) {
+    return (
+      <p className="mt-2 text-[11px] text-zinc-500">
+        Open a storyboard to manage portraits.
+      </p>
+    );
+  }
+
+  const canAdd = Boolean(callbacks?.addPortrait);
+  const canRemove = Boolean(callbacks?.removePortrait);
+
+  const submit = async () => {
+    if (!callbacks?.addPortrait) return;
+    const url = urlDraft.trim();
+    if (!url) return;
+    setSubmitting(true);
+    try {
+      await callbacks.addPortrait({
+        storyboardId,
+        ownerPackId: packRowId,
+        portraitView: viewDraft,
+        sourceUrl: url,
+        notes: notesDraft.trim() || undefined,
+      });
+      setUrlDraft("");
+      setNotesDraft("");
+      setViewDraft("front");
+      setAddOpen(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const remove = async (referenceId: string) => {
+    if (!callbacks?.removePortrait) return;
+    setBusyId(referenceId);
+    try {
+      await callbacks.removePortrait({ referenceId });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="mt-2 space-y-2">
+      {/* Canonical three-view status. Emerald tick = present, slate dot = missing. */}
+      <div className="flex items-center gap-2 text-[10px] text-zinc-400">
+        <span className="uppercase tracking-wide text-zinc-500">3-view</span>
+        <CanonicalBadge label="Front" ok={status.hasFront} />
+        <CanonicalBadge label="Side" ok={status.hasSide} />
+        <CanonicalBadge label="Back" ok={status.hasBack} />
+        {status.hasCanonicalThreeView ? (
+          <span className="text-emerald-400">complete</span>
+        ) : (
+          <span className="text-zinc-500">
+            missing {status.missingCanonical.join(", ")}
+          </span>
+        )}
+      </div>
+
+      {portraits === undefined ? (
+        <p className="text-[11px] text-zinc-500">Loading portraits...</p>
+      ) : ordered.length === 0 ? (
+        <p className="text-[11px] text-zinc-500">No reference portraits yet.</p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-2">
+          {ordered.map((portrait) => (
+            <PortraitThumb
+              key={portrait._id}
+              portrait={portrait}
+              busy={busyId === portrait._id}
+              canRemove={canRemove}
+              onRemove={() => void remove(portrait._id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {canAdd ? (
+        <div className="mt-1">
+          {addOpen ? (
+            <div className="rounded border border-zinc-800 p-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] uppercase tracking-wide text-zinc-500 w-10">
+                  View
+                </label>
+                <select
+                  value={viewDraft}
+                  onChange={(e) => setViewDraft(e.target.value as PortraitView)}
+                  className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-100"
+                >
+                  {PORTRAIT_VIEW_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] uppercase tracking-wide text-zinc-500 w-10">
+                  URL
+                </label>
+                <input
+                  type="url"
+                  value={urlDraft}
+                  onChange={(e) => setUrlDraft(e.target.value)}
+                  placeholder="https://..."
+                  className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-100"
+                />
+              </div>
+              <div className="flex items-start gap-2">
+                <label className="text-[10px] uppercase tracking-wide text-zinc-500 w-10 pt-1">
+                  Notes
+                </label>
+                <textarea
+                  value={notesDraft}
+                  onChange={(e) => setNotesDraft(e.target.value)}
+                  rows={2}
+                  placeholder="Optional"
+                  className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-100"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded bg-zinc-800 px-2 py-1 text-[10px] text-zinc-300"
+                  onClick={() => {
+                    setAddOpen(false);
+                    setUrlDraft("");
+                    setNotesDraft("");
+                  }}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-emerald-700 px-2 py-1 text-[10px] text-white disabled:opacity-40"
+                  onClick={() => void submit()}
+                  disabled={submitting || !urlDraft.trim()}
+                >
+                  {submitting ? "Adding..." : "Add"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="rounded bg-zinc-800 px-2 py-1 text-[10px] text-zinc-300"
+              onClick={() => setAddOpen(true)}
+            >
+              + Add portrait
+            </button>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CanonicalBadge({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <span
+      className={
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] " +
+        (ok
+          ? "bg-emerald-900/40 text-emerald-300"
+          : "bg-zinc-800 text-zinc-500")
+      }
+    >
+      <span aria-hidden>{ok ? "✓" : "·"}</span>
+      {label}
+    </span>
+  );
+}
+
+function PortraitThumb({
+  portrait,
+  busy,
+  canRemove,
+  onRemove,
+}: {
+  portrait: IdentityReferenceRecord;
+  busy: boolean;
+  canRemove: boolean;
+  onRemove: () => void;
+}) {
+  const viewLabel =
+    PORTRAIT_VIEW_OPTIONS.find((opt) => opt.value === portrait.portraitView)?.label ??
+    (portrait.portraitView ?? "unknown");
+  return (
+    <div className="relative group">
+      <img
+        src={portrait.sourceUrl}
+        alt={viewLabel}
+        className="aspect-square w-full object-cover rounded border border-border/60"
+      />
+      <div className="mt-1 flex items-center justify-between gap-1 text-[10px] text-zinc-400">
+        <span className="truncate">{viewLabel}</span>
+        {canRemove ? (
+          <button
+            type="button"
+            className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-300 disabled:opacity-40"
+            onClick={onRemove}
+            disabled={busy}
+            aria-label="Remove portrait"
+            title="Remove portrait"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -118,6 +118,43 @@ const CustomNode = ({ id, data, selected }: NodeProps<StoryNodeData>) => {
         )}
       </div>
 
+      {/* Shot metadata strip */}
+      {data.shotMeta && (
+        data.shotMeta.size
+          || (data.shotMeta.angle && data.shotMeta.angle !== "eye_level")
+          || (data.shotMeta.move && data.shotMeta.move !== "static")
+          || data.shotMeta.lensMm
+          || (data.shotMeta.aspect && data.shotMeta.aspect !== "16:9")
+      ) ? (
+        <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 border-b border-white/5 bg-black/20">
+          {data.shotMeta.size ? (
+            <span className="rounded border border-sky-400/25 bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-sky-200">
+              {data.shotMeta.size}
+            </span>
+          ) : null}
+          {data.shotMeta.angle && data.shotMeta.angle !== "eye_level" ? (
+            <span className="rounded border border-violet-400/25 bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-violet-200">
+              {data.shotMeta.angle.replace("_", " ")}
+            </span>
+          ) : null}
+          {data.shotMeta.move && data.shotMeta.move !== "static" ? (
+            <span className="rounded border border-amber-400/25 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-amber-200">
+              {data.shotMeta.move.replace("_", " ")}
+            </span>
+          ) : null}
+          {data.shotMeta.lensMm ? (
+            <span className="rounded border border-slate-400/25 bg-slate-500/15 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-200">
+              {data.shotMeta.lensMm}mm
+            </span>
+          ) : null}
+          {data.shotMeta.aspect && data.shotMeta.aspect !== "16:9" ? (
+            <span className="rounded border border-emerald-400/25 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-emerald-200">
+              {data.shotMeta.aspect}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Content Area */}
       <div className="p-4 flex-1 flex flex-col gap-2">
         <div className="flex items-start justify-between gap-2">

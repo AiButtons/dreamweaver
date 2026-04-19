@@ -18,6 +18,7 @@ import type {
   TeamPromptDraft,
   ToolCallAuditRecord,
 } from "@/app/storyboard/types";
+import type { CutTier } from "@/lib/cut-tier";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTrigger } from "@/components/ui/sheet";
@@ -43,6 +44,7 @@ const tabIcon: Record<TabKey, React.ComponentType<{ className?: string }>> = {
 };
 
 export function ProductionHubDrawer(props: {
+  storyboardId?: string;
   pendingApprovalsCount: number;
   continuityViolationCount: number;
   delegations: AgentDelegationRecord[];
@@ -93,15 +95,33 @@ export function ProductionHubDrawer(props: {
 
   onRunCritic: () => Promise<void>;
   onCreateBranch: () => Promise<void>;
-  onCherryPickLatest: () => Promise<void>;
+  onCherryPickCommit: (sourceCommitId: string, targetBranchId: string) => Promise<void>;
   onComputeLatestDiff: () => Promise<void>;
+  onSetBranchCutTier?: (branchId: string, cutTier: CutTier) => Promise<void>;
+  onSetCommitReviewRound?: (commitId: string, reviewRound?: number) => Promise<void>;
+  onBumpBranchHeadReviewRound?: (branchId: string) => Promise<void>;
 
   onDetectContradictions: () => Promise<void>;
+  onRunShotValidators?: () => Promise<void>;
   onResolveViolation?: (
     violationId: string,
     status: "acknowledged" | "resolved",
   ) => Promise<void>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+
+  // Reference portraits (Enhancement #7). Optional so consumers that don't
+  // need the portrait surface (e.g. legacy tests, headless tools) can
+  // continue to mount ProductionHubDrawer without wiring them.
+  identityPortraitCallbacks?: {
+    addPortrait: (input: {
+      storyboardId: string;
+      ownerPackId: string;
+      portraitView: "front" | "side" | "back" | "three_quarter" | "custom";
+      sourceUrl: string;
+      notes?: string;
+    }) => Promise<void>;
+    removePortrait: (input: { referenceId: string }) => Promise<void>;
+  };
 }) {
   const {
     pendingApprovalsCount,
@@ -229,9 +249,13 @@ export function ProductionHubDrawer(props: {
                       onRunCritic={props.onRunCritic}
                       branches={branches}
                       commits={commits}
+                      storyboardId={props.storyboardId ?? ""}
                       onCreateBranch={props.onCreateBranch}
-                      onCherryPickLatest={props.onCherryPickLatest}
+                      onCherryPickCommit={props.onCherryPickCommit}
                       onComputeLatestDiff={props.onComputeLatestDiff}
+                      onSetBranchCutTier={props.onSetBranchCutTier}
+                      onSetCommitReviewRound={props.onSetCommitReviewRound}
+                      onBumpBranchHeadReviewRound={props.onBumpBranchHeadReviewRound}
                     />
                     <SimulationCriticPanel
                       simulationRuns={simulationRuns}
@@ -244,8 +268,11 @@ export function ProductionHubDrawer(props: {
                   <ContinuityOSPanel
                     bundle={continuityBundle}
                     onDetectContradictions={props.onDetectContradictions}
+                    onRunShotValidators={props.onRunShotValidators}
                     onResolveViolation={props.onResolveViolation}
                     onPublishIdentityPack={props.onPublishIdentityPack}
+                    storyboardId={props.storyboardId}
+                    identityPortraitCallbacks={props.identityPortraitCallbacks}
                   />
                 </TabsContent>
                 <TabsContent value="monitor">

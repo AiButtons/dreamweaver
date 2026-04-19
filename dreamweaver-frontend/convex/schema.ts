@@ -146,6 +146,40 @@ export default defineSchema({
       negativePrompt: v.optional(v.string()),
       continuityDirectives: v.array(v.string()),
     }),
+    shotMeta: v.optional(
+      v.object({
+        number: v.optional(v.string()),
+        size: v.optional(v.union(
+          v.literal("ECU"), v.literal("CU"), v.literal("MCU"),
+          v.literal("MS"), v.literal("MLS"), v.literal("WS"), v.literal("EWS"),
+        )),
+        angle: v.optional(v.union(
+          v.literal("eye_level"), v.literal("high"), v.literal("low"),
+          v.literal("dutch"), v.literal("birds_eye"), v.literal("worms_eye"),
+        )),
+        lensMm: v.optional(v.number()),
+        tStop: v.optional(v.string()),
+        move: v.optional(v.union(
+          v.literal("static"), v.literal("push_in"), v.literal("pull_out"),
+          v.literal("dolly"), v.literal("track"), v.literal("tilt"),
+          v.literal("pan"), v.literal("whip_pan"), v.literal("handheld"),
+          v.literal("steadicam"), v.literal("crane"), v.literal("drone"),
+        )),
+        aspect: v.optional(v.union(
+          v.literal("2.39:1"), v.literal("1.85:1"), v.literal("16:9"),
+          v.literal("9:16"), v.literal("4:5"), v.literal("1:1"), v.literal("2:1"),
+        )),
+        durationS: v.optional(v.number()),
+        screenDirection: v.optional(v.union(
+          v.literal("left_to_right"), v.literal("right_to_left"), v.literal("neutral"),
+        )),
+        axisLineId: v.optional(v.string()),
+        blockingNotes: v.optional(v.string()),
+        props: v.optional(v.array(v.string())),
+        sfx: v.optional(v.array(v.string())),
+        vfx: v.optional(v.array(v.string())),
+      }),
+    ),
     media: v.object({
       images: v.array(mediaVariantValidator),
       videos: v.array(mediaVariantValidator),
@@ -344,11 +378,76 @@ export default defineSchema({
     ),
     consistencyScore: v.optional(v.number()),
     metadata: v.optional(v.record(v.string(), v.string())),
+    masterAssetId: v.optional(v.id("mediaAssets")),
+    variantSpec: v.optional(v.object({
+      aspect: v.optional(v.union(
+        v.literal("2.39:1"), v.literal("1.85:1"), v.literal("16:9"),
+        v.literal("9:16"), v.literal("4:5"), v.literal("1:1"), v.literal("2:1"),
+      )),
+      durationS: v.optional(v.number()),
+      locale: v.optional(v.string()),
+      abLabel: v.optional(v.string()),
+      platform: v.optional(v.union(
+        v.literal("meta"), v.literal("tiktok"), v.literal("youtube"),
+        v.literal("ctv"), v.literal("dv360"), v.literal("x"),
+        v.literal("linkedin"), v.literal("other"),
+      )),
+      endCard: v.optional(v.string()),
+      notes: v.optional(v.string()),
+    })),
+    deliveryStatus: v.optional(v.union(
+      v.literal("planned"),
+      v.literal("in_review"),
+      v.literal("approved"),
+      v.literal("delivered"),
+      v.literal("archived"),
+    )),
+    // Take status: director / script supervisor review label on the master.
+    // Optional — absence means the asset hasn't been marked yet.
+    takeStatus: v.optional(v.union(
+      v.literal("print"),
+      v.literal("hold"),
+      v.literal("ng"),
+      v.literal("noted"),
+    )),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_storyboard_node_kind_createdAt", ["storyboardId", "nodeId", "kind", "createdAt"])
-    .index("by_storyboard_createdAt", ["storyboardId", "createdAt"]),
+    .index("by_storyboard_createdAt", ["storyboardId", "createdAt"])
+    .index("by_master_createdAt", ["masterAssetId", "createdAt"])
+    .index("by_storyboard_deliveryStatus_updatedAt", ["storyboardId", "deliveryStatus", "updatedAt"]),
+
+  mediaComments: defineTable({
+    storyboardId: v.id("storyboards"),
+    mediaAssetId: v.id("mediaAssets"),
+    userId: v.string(),
+    // Denormalized author display fields so the review surface can show a
+    // name/email chip without a separate user-lookup round-trip. Optional
+    // because older rows / server-generated comments may not populate them.
+    authorName: v.optional(v.string()),
+    authorEmail: v.optional(v.string()),
+    // Top-level comments leave this unset; replies point at their parent.
+    // Single-level threading is enforced at the mutation layer.
+    parentCommentId: v.optional(v.id("mediaComments")),
+    // Millisecond offset from the start of the asset (for video). When unset
+    // the comment applies to the whole asset.
+    timecodeMs: v.optional(v.number()),
+    body: v.string(),
+    status: v.union(
+      v.literal("open"),
+      v.literal("resolved"),
+      v.literal("deleted"),
+    ),
+    resolvedAt: v.optional(v.number()),
+    resolvedByUserId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_asset_createdAt", ["mediaAssetId", "createdAt"])
+    .index("by_asset_timecode", ["mediaAssetId", "timecodeMs"])
+    .index("by_storyboard_status_createdAt", ["storyboardId", "status", "createdAt"])
+    .index("by_parent_createdAt", ["parentCommentId", "createdAt"]),
 
   approvalTasks: defineTable({
     storyboardId: v.id("storyboards"),
@@ -404,6 +503,17 @@ export default defineSchema({
     headCommitId: v.optional(v.string()),
     isDefault: v.boolean(),
     status: v.union(v.literal("active"), v.literal("archived")),
+    cutTier: v.optional(
+      v.union(
+        v.literal("assembly"),
+        v.literal("editors"),
+        v.literal("directors"),
+        v.literal("producers"),
+        v.literal("pictureLock"),
+        v.literal("online"),
+        v.literal("delivered"),
+      ),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -424,6 +534,7 @@ export default defineSchema({
     semanticSummary: v.string(),
     snapshotJson: v.string(),
     appliedByRunId: v.optional(v.string()),
+    reviewRound: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_storyboard_branch_createdAt", ["storyboardId", "branchId", "createdAt"])
@@ -489,6 +600,41 @@ export default defineSchema({
   })
     .index("by_storyboard_pack", ["storyboardId", "packId"])
     .index("by_user_visibility_updatedAt", ["userId", "visibility", "updatedAt"]),
+
+  // Reference imagery attached to an identity pack. Kept separate from
+  // `mediaAssets` (which is scene/shot-scoped via a required `nodeId`) so
+  // reference-imagery semantics don't pollute the media pipeline. Supports
+  // future roles (wardrobe photosets, AutoCameo anchors) via the `role`
+  // discriminator — the MVP only writes rows with role="portrait".
+  identityReferenceAssets: defineTable({
+    storyboardId: v.id("storyboards"),
+    userId: v.string(),
+    ownerPackId: v.id("identityPacks"),
+    role: v.union(
+      v.literal("portrait"),
+      v.literal("wardrobe"),
+      v.literal("cameo_reference"),
+    ),
+    portraitView: v.optional(v.union(
+      v.literal("front"),
+      v.literal("side"),
+      v.literal("back"),
+      v.literal("three_quarter"),
+      v.literal("custom"),
+    )),
+    sourceUrl: v.string(),
+    modelId: v.optional(v.string()),
+    prompt: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    status: v.union(
+      v.literal("active"),
+      v.literal("archived"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_pack_createdAt", ["ownerPackId", "createdAt"])
+    .index("by_storyboard_role_createdAt", ["storyboardId", "role", "createdAt"]),
 
   globalConstraints: defineTable({
     storyboardId: v.id("storyboards"),

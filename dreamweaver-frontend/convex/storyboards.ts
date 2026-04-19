@@ -27,6 +27,39 @@ const consistencyStatus = v.union(
   v.literal("blocked"),
 );
 
+const shotMetaValidator = v.object({
+  number: v.optional(v.string()),
+  size: v.optional(v.union(
+    v.literal("ECU"), v.literal("CU"), v.literal("MCU"),
+    v.literal("MS"), v.literal("MLS"), v.literal("WS"), v.literal("EWS"),
+  )),
+  angle: v.optional(v.union(
+    v.literal("eye_level"), v.literal("high"), v.literal("low"),
+    v.literal("dutch"), v.literal("birds_eye"), v.literal("worms_eye"),
+  )),
+  lensMm: v.optional(v.number()),
+  tStop: v.optional(v.string()),
+  move: v.optional(v.union(
+    v.literal("static"), v.literal("push_in"), v.literal("pull_out"),
+    v.literal("dolly"), v.literal("track"), v.literal("tilt"),
+    v.literal("pan"), v.literal("whip_pan"), v.literal("handheld"),
+    v.literal("steadicam"), v.literal("crane"), v.literal("drone"),
+  )),
+  aspect: v.optional(v.union(
+    v.literal("2.39:1"), v.literal("1.85:1"), v.literal("16:9"),
+    v.literal("9:16"), v.literal("4:5"), v.literal("1:1"), v.literal("2:1"),
+  )),
+  durationS: v.optional(v.number()),
+  screenDirection: v.optional(v.union(
+    v.literal("left_to_right"), v.literal("right_to_left"), v.literal("neutral"),
+  )),
+  axisLineId: v.optional(v.string()),
+  blockingNotes: v.optional(v.string()),
+  props: v.optional(v.array(v.string())),
+  sfx: v.optional(v.array(v.string())),
+  vfx: v.optional(v.array(v.string())),
+});
+
 const storyboardStatus = v.union(v.literal("active"), v.literal("trashed"));
 const librarySort = v.union(
   v.literal("updated_desc"),
@@ -56,6 +89,7 @@ const patchOperation = v.object({
   branchId: v.optional(v.string()),
   order: v.optional(v.number()),
   isPrimary: v.optional(v.boolean()),
+  shotMeta: v.optional(shotMetaValidator),
 });
 
 const hashString = (raw: string) => {
@@ -1143,6 +1177,7 @@ export const upsertNode = mutation({
     segment: v.string(),
     position: v.object({ x: v.number(), y: v.number() }),
     continuityStatus: v.optional(consistencyStatus),
+    shotMeta: v.optional(shotMetaValidator),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -1166,6 +1201,7 @@ export const upsertNode = mutation({
           args.position,
           now,
         ),
+        ...(args.shotMeta !== undefined ? { shotMeta: args.shotMeta } : {}),
       });
       await recomputeStoryboardStatsInternal(ctx, args.storyboardId);
       return id;
@@ -1179,6 +1215,7 @@ export const upsertNode = mutation({
         ...existing.continuity,
         consistencyStatus: args.continuityStatus ?? existing.continuity.consistencyStatus,
       },
+      shotMeta: args.shotMeta ?? existing.shotMeta,
       updatedAt: now,
     });
     await ctx.db.patch(args.storyboardId, { updatedAt: now });
@@ -1505,6 +1542,7 @@ export const applyGraphPatch = mutation({
               label: operation.label,
               segment: operation.segment,
               position: operation.position,
+              shotMeta: operation.shotMeta ?? existingNode.shotMeta,
               updatedAt: Date.now(),
             });
           } else {
@@ -1519,6 +1557,7 @@ export const applyGraphPatch = mutation({
                 operation.position,
                 Date.now(),
               ),
+              ...(operation.shotMeta !== undefined ? { shotMeta: operation.shotMeta } : {}),
             });
           }
           touchedNodes.add(operation.nodeId);
@@ -1543,6 +1582,7 @@ export const applyGraphPatch = mutation({
             label: operation.label ?? row.label,
             segment: operation.segment ?? row.segment,
             position: operation.position ?? row.position,
+            shotMeta: operation.shotMeta ?? row.shotMeta,
             updatedAt: Date.now(),
           });
           touchedNodes.add(operation.nodeId);

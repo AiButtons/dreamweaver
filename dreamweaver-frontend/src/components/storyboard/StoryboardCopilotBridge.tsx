@@ -10,6 +10,7 @@ import {
   StoryNode,
   TeamMemberConfig,
   TeamPromptDraft,
+  type UserIdentity,
 } from "@/app/storyboard/types";
 import { mutationRef } from "@/lib/convexRefs";
 import {
@@ -56,11 +57,9 @@ type RollingContextMap = Record<
   }
 >;
 
-export type UserIdentity = {
-  userId: string;
-  email: string | null;
-  name: string | null;
-};
+// Canonical `UserIdentity` now lives in `@/app/storyboard/types`; it is
+// re-exported here so existing imports from the bridge keep working.
+export type { UserIdentity };
 
 type StoryboardAgentState = {
   storyboardId: string;

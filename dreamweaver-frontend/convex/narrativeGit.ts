@@ -11,6 +11,27 @@ const nodeType = v.union(
   v.literal("background_ref"),
 );
 
+const cutTierValidator = v.union(
+  v.literal("assembly"),
+  v.literal("editors"),
+  v.literal("directors"),
+  v.literal("producers"),
+  v.literal("pictureLock"),
+  v.literal("online"),
+  v.literal("delivered"),
+);
+
+// keep in sync with src/lib/cut-tier/order.ts
+const CUT_TIER_ORDER_MAP: Record<string, number> = {
+  assembly: 0,
+  editors: 1,
+  directors: 2,
+  producers: 3,
+  pictureLock: 4,
+  online: 5,
+  delivered: 6,
+};
+
 const edgeType = v.union(
   v.literal("serial"),
   v.literal("parallel"),
@@ -933,6 +954,114 @@ export const computeSemanticDiff = mutation({
     });
 
     return diff;
+  },
+});
+
+export const setBranchCutTier = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.string(),
+    cutTier: cutTierValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const branch = await ctx.db
+      .query("narrativeBranches")
+      .withIndex("by_storyboard_branch", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("branchId", args.branchId),
+      )
+      .unique();
+    if (!branch) {
+      throw new ConvexError("Branch not found");
+    }
+
+    const existing = branch.cutTier as string | undefined;
+    if (existing && CUT_TIER_ORDER_MAP[args.cutTier] < CUT_TIER_ORDER_MAP[existing]) {
+      throw new ConvexError("Cannot regress cut tier");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(branch._id, {
+      cutTier: args.cutTier,
+      updatedAt: now,
+    });
+    return { branchId: args.branchId, cutTier: args.cutTier };
+  },
+});
+
+export const setCommitReviewRound = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    commitId: v.string(),
+    reviewRound: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const commit = await ctx.db
+      .query("narrativeCommits")
+      .withIndex("by_storyboard_commit", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("commitId", args.commitId),
+      )
+      .unique();
+    if (!commit) {
+      throw new ConvexError("Commit not found");
+    }
+
+    if (args.reviewRound !== undefined) {
+      if (!Number.isFinite(args.reviewRound) || args.reviewRound < 1) {
+        throw new ConvexError("reviewRound must be >= 1");
+      }
+    }
+
+    const value =
+      args.reviewRound === undefined ? undefined : Math.floor(args.reviewRound);
+    await ctx.db.patch(commit._id, { reviewRound: value });
+    return { commitId: args.commitId, reviewRound: value ?? null };
+  },
+});
+
+export const bumpBranchHeadReviewRound = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+
+    const branch = await ctx.db
+      .query("narrativeBranches")
+      .withIndex("by_storyboard_branch", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("branchId", args.branchId),
+      )
+      .unique();
+    if (!branch) {
+      throw new ConvexError("Branch not found");
+    }
+    const headCommitId = branch.headCommitId as string | undefined;
+    if (!headCommitId) {
+      throw new ConvexError("Branch has no head commit");
+    }
+
+    const commit = await ctx.db
+      .query("narrativeCommits")
+      .withIndex("by_storyboard_commit", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("commitId", headCommitId),
+      )
+      .unique();
+    if (!commit) {
+      throw new ConvexError("Head commit not found");
+    }
+
+    const current =
+      typeof commit.reviewRound === "number" ? commit.reviewRound : 0;
+    const next = current + 1;
+    await ctx.db.patch(commit._id, { reviewRound: next });
+    return { commitId: headCommitId, reviewRound: next };
   },
 });
 

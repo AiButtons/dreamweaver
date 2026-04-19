@@ -3,7 +3,30 @@
 import React, { useMemo, useState } from "react";
 import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2 } from "lucide-react";
 import { MediaType } from "@/app/storyboard/types";
-import type { StoryEdge, StoryNode, VoiceName, StoryboardMediaConfig } from "@/app/storyboard/types";
+import type {
+  AspectRatio,
+  CameraMove,
+  DeliveryStatus,
+  DeliveryVariantSpec,
+  ScreenDirection,
+  ShotAngle,
+  ShotMeta,
+  ShotSize,
+  StoryEdge,
+  StoryNode,
+  StoryboardMediaConfig,
+  UserIdentity,
+  VoiceName,
+} from "@/app/storyboard/types";
+import DeliveryMatrixSection from "@/components/storyboard/DeliveryMatrixSection";
+import ReviewPanel, { type ReviewCallbacks } from "@/components/storyboard/ReviewPanel";
+import {
+  ASPECT_RATIO_OPTIONS,
+  CAMERA_MOVE_OPTIONS,
+  LENS_MM_PRESETS,
+  SHOT_ANGLE_OPTIONS,
+  SHOT_SIZE_OPTIONS,
+} from "@/app/storyboard/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,12 +36,45 @@ import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
+export interface DeliveryVariantCallbacks {
+  createVariant: (args: {
+    storyboardId: string;
+    masterAssetId: string;
+    variantSpec: DeliveryVariantSpec;
+    sourceUrl?: string;
+    modelId?: string;
+  }) => Promise<unknown>;
+  createMatrix: (args: {
+    storyboardId: string;
+    masterAssetId: string;
+    matrix: {
+      aspects?: AspectRatio[];
+      durationsS?: number[];
+      locales?: string[];
+      abLabels?: string[];
+      platform?: DeliveryVariantSpec["platform"];
+      endCard?: string;
+      notes?: string;
+    };
+  }) => Promise<unknown>;
+  updateSpec: (args: { mediaAssetId: string; variantSpec: DeliveryVariantSpec }) => Promise<unknown>;
+  updateStatus: (args: { mediaAssetId: string; deliveryStatus: DeliveryStatus }) => Promise<unknown>;
+  attachSource: (args: { mediaAssetId: string; sourceUrl: string; modelId?: string }) => Promise<unknown>;
+  archive: (args: { mediaAssetId: string }) => Promise<unknown>;
+  promote: (args: { mediaAssetId: string }) => Promise<unknown>;
+}
+
 interface PropertiesPanelProps {
   selectedNode: StoryNode | null;
   nodes?: StoryNode[];
   edges?: StoryEdge[];
+  storyboardId?: string;
   onGenerateMedia: (nodeId: string, type: MediaType, prompt: string, config: StoryboardMediaConfig) => void;
   onEditNode: (nodeId: string, instruction: string) => void;
+  onUpdateShotMeta?: (nodeId: string, next: ShotMeta) => void;
+  deliveryVariantCallbacks?: DeliveryVariantCallbacks;
+  userIdentity?: UserIdentity | null;
+  reviewCallbacks?: ReviewCallbacks;
   isProcessing: boolean;
   onClose: () => void;
 }
@@ -50,12 +106,17 @@ export default function PropertiesPanel({
   selectedNode,
   nodes = [],
   edges = [],
+  storyboardId,
   onGenerateMedia,
   onEditNode,
+  onUpdateShotMeta,
+  deliveryVariantCallbacks,
+  userIdentity,
+  reviewCallbacks,
   isProcessing,
   onClose,
 }: PropertiesPanelProps) {
-  const [tab, setTab] = useState<"shot" | "media" | "continuity" | "advanced">("media");
+  const [tab, setTab] = useState<"shot" | "media" | "delivery" | "review" | "continuity" | "advanced">("media");
   const tabTriggerClass =
     "border border-transparent text-muted-foreground data-[state=active]:border-primary/40 data-[state=active]:bg-primary/15 data-[state=active]:text-foreground";
 
@@ -148,14 +209,23 @@ export default function PropertiesPanel({
 
       <div className="p-4">
         <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-          <TabsList className="grid w-full grid-cols-4 bg-background/70 border border-border/70 p-1">
+          <TabsList className="grid w-full grid-cols-6 bg-background/70 border border-border/70 p-1">
             <TabsTrigger value="shot" className={tabTriggerClass}>Shot</TabsTrigger>
             <TabsTrigger value="media" className={tabTriggerClass}>Media</TabsTrigger>
+            <TabsTrigger value="delivery" className={tabTriggerClass}>Delivery</TabsTrigger>
+            <TabsTrigger value="review" className={tabTriggerClass}>Review</TabsTrigger>
             <TabsTrigger value="continuity" className={tabTriggerClass}>Continuity</TabsTrigger>
             <TabsTrigger value="advanced" className={tabTriggerClass}>Advanced</TabsTrigger>
           </TabsList>
 
           <TabsContent value="shot" className="mt-4 space-y-4">
+            <ShotMetaForm
+              nodeId={id}
+              shotMeta={data.shotMeta}
+              onUpdateShotMeta={onUpdateShotMeta}
+              disabled={isProcessing}
+            />
+
             <div className="rounded-xl border border-border/60 bg-card/40 p-3">
               <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
                 Rewrite Node
@@ -311,6 +381,24 @@ export default function PropertiesPanel({
               <Sparkles className="size-4" />
               {mediaType === MediaType.IMAGE ? "Generate Image" : mediaType === MediaType.VIDEO ? "Generate Video" : "Generate Audio"}
             </Button>
+          </TabsContent>
+
+          <TabsContent value="delivery" className="mt-4 space-y-4">
+            <DeliveryMatrixSection
+              storyboardId={storyboardId}
+              node={selectedNode}
+              callbacks={deliveryVariantCallbacks}
+              disabled={isProcessing}
+            />
+          </TabsContent>
+
+          <TabsContent value="review" className="mt-4 space-y-4">
+            <ReviewPanel
+              storyboardId={storyboardId}
+              selectedNode={selectedNode}
+              userIdentity={userIdentity}
+              callbacks={reviewCallbacks}
+            />
           </TabsContent>
 
           <TabsContent value="continuity" className="mt-4 space-y-4">
@@ -486,6 +574,262 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="space-y-1">
       <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{label}</div>
       {children}
+    </div>
+  );
+}
+
+function ShotMetaForm({
+  nodeId,
+  shotMeta,
+  onUpdateShotMeta,
+  disabled,
+}: {
+  nodeId: string;
+  shotMeta: ShotMeta | undefined;
+  onUpdateShotMeta?: (nodeId: string, next: ShotMeta) => void;
+  disabled: boolean;
+}) {
+  const current: ShotMeta = shotMeta ?? {};
+
+  const commit = (patch: Partial<ShotMeta>) => {
+    if (!onUpdateShotMeta) return;
+    const next: ShotMeta = { ...current, ...patch };
+    // Drop explicit undefineds so the stored object stays compact.
+    for (const key of Object.keys(next) as Array<keyof ShotMeta>) {
+      if (next[key] === undefined) {
+        delete next[key];
+      }
+    }
+    onUpdateShotMeta(nodeId, next);
+  };
+
+  const commitListField = (field: "props" | "sfx" | "vfx", raw: string) => {
+    const parsed = raw
+      .split(",")
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    commit({ [field]: parsed.length > 0 ? parsed : undefined } as Partial<ShotMeta>);
+  };
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card/40 p-3 space-y-3">
+      <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+        Shot metadata
+      </div>
+
+      <Field label="Scene / shot number">
+        <Input
+          defaultValue={current.number ?? ""}
+          placeholder="1A"
+          onBlur={(e) =>
+            commit({ number: e.target.value.trim() || undefined })
+          }
+          disabled={disabled}
+        />
+      </Field>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Shot size">
+          <select
+            value={current.size ?? ""}
+            disabled={disabled}
+            onChange={(e) =>
+              commit({ size: (e.target.value || undefined) as ShotSize | undefined })
+            }
+            className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-xs"
+          >
+            <option value="">—</option>
+            {SHOT_SIZE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} · {opt.description}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Angle">
+          <select
+            value={current.angle ?? ""}
+            disabled={disabled}
+            onChange={(e) =>
+              commit({ angle: (e.target.value || undefined) as ShotAngle | undefined })
+            }
+            className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-xs"
+          >
+            <option value="">—</option>
+            {SHOT_ANGLE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Camera move">
+          <select
+            value={current.move ?? ""}
+            disabled={disabled}
+            onChange={(e) =>
+              commit({ move: (e.target.value || undefined) as CameraMove | undefined })
+            }
+            className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-xs"
+          >
+            <option value="">—</option>
+            {CAMERA_MOVE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Lens (mm)">
+          <Input
+            type="number"
+            list={`lens-presets-${nodeId}`}
+            defaultValue={current.lensMm ?? ""}
+            placeholder="35"
+            min={0}
+            disabled={disabled}
+            onBlur={(e) => {
+              const raw = e.target.value.trim();
+              if (raw === "") {
+                commit({ lensMm: undefined });
+                return;
+              }
+              const parsed = Number(raw);
+              commit({ lensMm: Number.isFinite(parsed) ? parsed : undefined });
+            }}
+          />
+          <datalist id={`lens-presets-${nodeId}`}>
+            {LENS_MM_PRESETS.map((mm) => (
+              <option key={mm} value={mm} />
+            ))}
+          </datalist>
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Aspect ratio">
+          <select
+            value={current.aspect ?? ""}
+            disabled={disabled}
+            onChange={(e) =>
+              commit({ aspect: (e.target.value || undefined) as AspectRatio | undefined })
+            }
+            className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-xs"
+          >
+            <option value="">—</option>
+            {ASPECT_RATIO_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} · {opt.context}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Duration (sec)">
+          <Input
+            type="number"
+            step={0.5}
+            min={0}
+            defaultValue={current.durationS ?? ""}
+            placeholder="3.5"
+            disabled={disabled}
+            onBlur={(e) => {
+              const raw = e.target.value.trim();
+              if (raw === "") {
+                commit({ durationS: undefined });
+                return;
+              }
+              const parsed = Number(raw);
+              commit({ durationS: Number.isFinite(parsed) ? parsed : undefined });
+            }}
+          />
+        </Field>
+      </div>
+
+      <Field label="T-stop">
+        <Input
+          defaultValue={current.tStop ?? ""}
+          placeholder="T2.8"
+          disabled={disabled}
+          onBlur={(e) => commit({ tStop: e.target.value.trim() || undefined })}
+        />
+      </Field>
+
+      <Field label="Screen direction">
+        <div className="grid grid-cols-3 gap-1">
+          {([
+            { value: "left_to_right", label: "←" },
+            { value: "neutral", label: "neutral" },
+            { value: "right_to_left", label: "→" },
+          ] as Array<{ value: ScreenDirection; label: string }>).map((opt) => {
+            const active = current.screenDirection === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  commit({
+                    screenDirection: active ? undefined : opt.value,
+                  })
+                }
+                className={cn(
+                  "rounded-md border px-2 py-1.5 text-xs transition-colors",
+                  "border-border/60 bg-background/60 hover:bg-background/80",
+                  active && "border-primary/50 bg-primary/15 ring-1 ring-primary/30",
+                  disabled && "opacity-60 cursor-not-allowed",
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      <Field label="Blocking notes">
+        <Textarea
+          defaultValue={current.blockingNotes ?? ""}
+          placeholder="Where the actors stand, where they move, eyelines..."
+          className="min-h-[72px] bg-background/60"
+          disabled={disabled}
+          onBlur={(e) =>
+            commit({ blockingNotes: e.target.value.trim() || undefined })
+          }
+        />
+      </Field>
+
+      <Field label="Props (comma-separated)">
+        <Input
+          defaultValue={(current.props ?? []).join(", ")}
+          placeholder="briefcase, umbrella"
+          disabled={disabled}
+          onBlur={(e) => commitListField("props", e.target.value)}
+        />
+      </Field>
+
+      <Field label="SFX (comma-separated)">
+        <Input
+          defaultValue={(current.sfx ?? []).join(", ")}
+          placeholder="thunder, footsteps"
+          disabled={disabled}
+          onBlur={(e) => commitListField("sfx", e.target.value)}
+        />
+      </Field>
+
+      <Field label="VFX (comma-separated)">
+        <Input
+          defaultValue={(current.vfx ?? []).join(", ")}
+          placeholder="muzzle flash, screen replacement"
+          disabled={disabled}
+          onBlur={(e) => commitListField("vfx", e.target.value)}
+        />
+      </Field>
     </div>
   );
 }

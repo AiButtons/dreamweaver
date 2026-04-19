@@ -25,6 +25,11 @@ import CanvasToolbar from "@/components/storyboard/CanvasToolbar";
 import { StoryboardCopilotBridge } from "@/components/storyboard/StoryboardCopilotBridge";
 import { OutlinePanel } from "@/components/storyboard/OutlinePanel";
 import { ProductionHubDrawer } from "@/components/storyboard/ProductionHubDrawer";
+import { ExportMenu } from "@/components/storyboard/ExportMenu";
+import {
+  runShotValidators,
+  SHOT_VALIDATOR_CODE_PREFIXES,
+} from "@/lib/continuity-validators";
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
@@ -38,6 +43,7 @@ import {
   ChatMessage,
   MediaType,
   NodeType,
+  ShotMeta,
   StoryboardMediaConfig,
   StoryNodeData,
   MediaVariant,
@@ -56,6 +62,7 @@ import {
   NarrativeBranchRecord,
   NarrativeCommitRecord,
 } from "@/app/storyboard/types";
+import type { CutTier } from "@/lib/cut-tier";
 import { generateStoryGraph, editNodeText, generateMedia } from "@/app/storyboard/services/apiService";
 
 const generateId = () => uuidv4();
@@ -78,6 +85,7 @@ type SnapshotNode = {
     lineageHash: string;
   };
   promptPack?: StoryNodeData["promptPack"];
+  shotMeta?: ShotMeta;
   media?: {
     images: Array<{ mediaAssetId: string; url: string; modelId: string; createdAt: number }>;
     videos: Array<{ mediaAssetId: string; url: string; modelId: string; createdAt: number }>;
@@ -355,6 +363,18 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const completeMediaGeneration = useMutation(mutationRef("mediaAssets:completeMediaGeneration"));
   const failMediaGeneration = useMutation(mutationRef("mediaAssets:failMediaGeneration"));
   const sweepStaleMediaGenerations = useMutation(mutationRef("mediaAssets:sweepStaleMediaGenerations"));
+  const createDeliveryVariantMut = useMutation(mutationRef("mediaAssets:createDeliveryVariant"));
+  const createDeliveryVariantMatrixMut = useMutation(mutationRef("mediaAssets:createDeliveryVariantMatrix"));
+  const updateDeliveryVariantSpecMut = useMutation(mutationRef("mediaAssets:updateDeliveryVariantSpec"));
+  const updateDeliveryVariantStatusMut = useMutation(mutationRef("mediaAssets:updateDeliveryVariantStatus"));
+  const attachVariantSourceMut = useMutation(mutationRef("mediaAssets:attachVariantSource"));
+  const archiveDeliveryVariantMut = useMutation(mutationRef("mediaAssets:archiveDeliveryVariant"));
+  const promoteVariantToMasterMut = useMutation(mutationRef("mediaAssets:promoteVariantToMaster"));
+  const addMediaCommentMut = useMutation(mutationRef("mediaComments:addMediaComment"));
+  const editMediaCommentMut = useMutation(mutationRef("mediaComments:editMediaComment"));
+  const deleteMediaCommentMut = useMutation(mutationRef("mediaComments:deleteMediaComment"));
+  const resolveMediaCommentMut = useMutation(mutationRef("mediaComments:resolveMediaComment"));
+  const setTakeStatusMut = useMutation(mutationRef("mediaAssets:setTakeStatus"));
   const bootstrapPrebuiltTeams = useMutation(mutationRef("agentTeams:bootstrapPrebuiltTeams"));
   const assignTeamToStoryboard = useMutation(mutationRef("agentTeams:assignTeamToStoryboard"));
   const createAgentTeam = useMutation(mutationRef("agentTeams:createTeam"));
@@ -372,11 +392,18 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const updateSimulationRunStatus = useMutation(
     mutationRef("dailies:updateSimulationRunStatus"),
   );
-  const detectContradictions = useMutation(mutationRef("continuityOS:detectContradictions"));
+  const recordShotValidatorViolationsMutation = useMutation(
+    mutationRef("continuityOS:recordShotValidatorViolations"),
+  );
   const resolveViolationMutation = useMutation(mutationRef("continuityOS:resolveViolation"));
   const publishIdentityPackMutation = useMutation(mutationRef("continuityOS:publishIdentityPack"));
+  const addIdentityPortraitMutation = useMutation(mutationRef("identityReferences:addIdentityPortrait"));
+  const removeIdentityReferenceMutation = useMutation(mutationRef("identityReferences:removeIdentityReference"));
   const createBranchMutation = useMutation(mutationRef("narrativeGit:createBranch"));
   const cherryPickCommitMutation = useMutation(mutationRef("narrativeGit:cherryPickCommit"));
+  const setBranchCutTierMutation = useMutation(mutationRef("narrativeGit:setBranchCutTier"));
+  const setCommitReviewRoundMutation = useMutation(mutationRef("narrativeGit:setCommitReviewRound"));
+  const bumpBranchHeadReviewRoundMutation = useMutation(mutationRef("narrativeGit:bumpBranchHeadReviewRound"));
   const computeSemanticDiffMutation = useMutation(mutationRef("narrativeGit:computeSemanticDiff"));
   const createApprovalTaskMutation = useMutation(mutationRef("approvals:createTask"));
   const resolveApprovalTaskMutation = useMutation(mutationRef("approvals:resolveTask"));
@@ -457,6 +484,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             lineageHash: "",
           },
           promptPack: node.promptPack ?? { continuityDirectives: [] },
+          shotMeta: node.shotMeta,
           media,
           image: activeImage,
           video: activeVideo,
@@ -527,6 +555,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             segment: node.data.segment,
             position: node.position,
             continuityStatus: node.data.continuity.consistencyStatus,
+            shotMeta: node.data.shotMeta,
           }).catch((err) =>
             console.warn("undo/redo upsertNode failed", err),
           ),
@@ -667,6 +696,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
         segment: node.data.segment,
         position: node.position,
         continuityStatus: node.data.continuity.consistencyStatus,
+        shotMeta: node.data.shotMeta,
       });
     },
     [activeStoryboardId, upsertNode],
@@ -690,6 +720,99 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       });
     },
     [activeStoryboardId, upsertEdge],
+  );
+
+  const handleUpdateShotMeta = useCallback(
+    (nodeId: string, next: ShotMeta) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      captureHistory();
+      updateNodeData(nodeId, { shotMeta: next });
+      void persistNode({ ...node, data: { ...node.data, shotMeta: next } });
+    },
+    [captureHistory, nodes, persistNode, updateNodeData],
+  );
+
+  // Bundle the seven delivery-variant mutations into a single callbacks
+  // object so PropertiesPanel doesn't balloon its props list. Memoized so
+  // the inner <DeliveryMatrixSection> doesn't re-render on unrelated state.
+  const deliveryVariantCallbacks = useMemo(
+    () => ({
+      createVariant: (args: Parameters<typeof createDeliveryVariantMut>[0]) =>
+        createDeliveryVariantMut(args),
+      createMatrix: (args: Parameters<typeof createDeliveryVariantMatrixMut>[0]) =>
+        createDeliveryVariantMatrixMut(args),
+      updateSpec: (args: Parameters<typeof updateDeliveryVariantSpecMut>[0]) =>
+        updateDeliveryVariantSpecMut(args),
+      updateStatus: (args: Parameters<typeof updateDeliveryVariantStatusMut>[0]) =>
+        updateDeliveryVariantStatusMut(args),
+      attachSource: (args: Parameters<typeof attachVariantSourceMut>[0]) =>
+        attachVariantSourceMut(args),
+      archive: (args: Parameters<typeof archiveDeliveryVariantMut>[0]) =>
+        archiveDeliveryVariantMut(args),
+      promote: (args: Parameters<typeof promoteVariantToMasterMut>[0]) =>
+        promoteVariantToMasterMut(args),
+    }),
+    [
+      createDeliveryVariantMut,
+      createDeliveryVariantMatrixMut,
+      updateDeliveryVariantSpecMut,
+      updateDeliveryVariantStatusMut,
+      attachVariantSourceMut,
+      archiveDeliveryVariantMut,
+      promoteVariantToMasterMut,
+    ],
+  );
+
+  // Review surface: 5 comment mutations + take-status. The review panel
+  // treats activeStoryboardId as required so we close over it here when
+  // posting new comments (edits/deletes look up the comment server-side and
+  // don't need the storyboardId from the caller).
+  const reviewCallbacks = useMemo(
+    () => ({
+      addComment: async (input: {
+        mediaAssetId: string;
+        body: string;
+        timecodeMs?: number;
+        parentCommentId?: string;
+        authorName?: string;
+        authorEmail?: string;
+      }) => {
+        if (!activeStoryboardId) return;
+        const args: Record<string, unknown> = {
+          storyboardId: activeStoryboardId,
+          mediaAssetId: input.mediaAssetId,
+          body: input.body,
+        };
+        if (input.timecodeMs !== undefined) args.timecodeMs = input.timecodeMs;
+        if (input.parentCommentId !== undefined) args.parentCommentId = input.parentCommentId;
+        if (input.authorName !== undefined) args.authorName = input.authorName;
+        if (input.authorEmail !== undefined) args.authorEmail = input.authorEmail;
+        return (await addMediaCommentMut(args as Parameters<typeof addMediaCommentMut>[0])) as unknown as string;
+      },
+      editComment: async (input: { commentId: string; body: string }) => {
+        await editMediaCommentMut(input as Parameters<typeof editMediaCommentMut>[0]);
+      },
+      deleteComment: async (input: { commentId: string }) => {
+        await deleteMediaCommentMut(input as Parameters<typeof deleteMediaCommentMut>[0]);
+      },
+      resolveComment: async (input: { commentId: string; resolved: boolean }) => {
+        await resolveMediaCommentMut(input as Parameters<typeof resolveMediaCommentMut>[0]);
+      },
+      setTakeStatus: async (input: { mediaAssetId: string; takeStatus?: "print" | "hold" | "ng" | "noted" }) => {
+        const args: Record<string, unknown> = { mediaAssetId: input.mediaAssetId };
+        if (input.takeStatus !== undefined) args.takeStatus = input.takeStatus;
+        await setTakeStatusMut(args as Parameters<typeof setTakeStatusMut>[0]);
+      },
+    }),
+    [
+      activeStoryboardId,
+      addMediaCommentMut,
+      editMediaCommentMut,
+      deleteMediaCommentMut,
+      resolveMediaCommentMut,
+      setTakeStatusMut,
+    ],
   );
 
   const onConnect: OnConnect = useCallback(
@@ -1352,16 +1475,53 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     if (!activeStoryboardId) {
       return;
     }
-    const rollingSummary = nodes
-      .slice(-12)
-      .map((node) => node.data.historyContext.rollingSummary || node.data.segment)
-      .join(" | ");
-    await detectContradictions({
+    try {
+      const res = await fetch("/api/storyboard/continuity-critic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storyboardId: activeStoryboardId,
+          branchId: "main",
+        }),
+      });
+      if (!res.ok) {
+        console.warn(
+          "Continuity critic failed",
+          res.status,
+          await res.text(),
+        );
+      }
+    } catch (err) {
+      console.warn("Continuity critic error", err);
+    }
+  }, [activeStoryboardId]);
+
+  const handleRunShotValidators = useCallback(async () => {
+    if (!activeStoryboardId) return;
+    const input = {
+      nodes: nodes.map((n) => ({
+        nodeId: n.id,
+        nodeType: n.data.nodeType,
+        label: n.data.label,
+        shotMeta: n.data.shotMeta,
+        entityRefs: n.data.entityRefs,
+      })),
+      edges: edges.map((e) => ({
+        sourceNodeId: e.source,
+        targetNodeId: e.target,
+        edgeType: e.data?.edgeType,
+        isPrimary: e.data?.isPrimary,
+        order: e.data?.order,
+      })),
+    };
+    const violations = runShotValidators(input);
+    await recordShotValidatorViolationsMutation({
       storyboardId: activeStoryboardId,
       branchId: "main",
-      rollingSummary,
+      violations,
+      clearCodePrefixes: [...SHOT_VALIDATOR_CODE_PREFIXES],
     });
-  }, [activeStoryboardId, detectContradictions, nodes]);
+  }, [activeStoryboardId, edges, nodes, recordShotValidatorViolationsMutation]);
 
   const handleResolveViolation = useCallback(
     async (violationId: string, status: "acknowledged" | "resolved") => {
@@ -1387,6 +1547,31 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     [activeStoryboardId, publishIdentityPackMutation],
   );
 
+  // Reference-portrait callbacks threaded into ContinuityOSPanel via the
+  // ProductionHubDrawer. Memoized so the Identity tab doesn't remount its
+  // query subscriptions on unrelated state changes.
+  const identityPortraitCallbacks = useMemo(
+    () => ({
+      addPortrait: async (input: {
+        storyboardId: string;
+        ownerPackId: string;
+        portraitView: "front" | "side" | "back" | "three_quarter" | "custom";
+        sourceUrl: string;
+        notes?: string;
+      }) => {
+        await addIdentityPortraitMutation(
+          input as Parameters<typeof addIdentityPortraitMutation>[0],
+        );
+      },
+      removePortrait: async (input: { referenceId: string }) => {
+        await removeIdentityReferenceMutation(
+          input as Parameters<typeof removeIdentityReferenceMutation>[0],
+        );
+      },
+    }),
+    [addIdentityPortraitMutation, removeIdentityReferenceMutation],
+  );
+
   const handleCreateBranch = useCallback(async () => {
     if (!activeStoryboardId) {
       return;
@@ -1400,38 +1585,36 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     });
   }, [activeStoryboardId, createBranchMutation, defaultBranchId]);
 
-  const handleCherryPickLatest = useCallback(async () => {
-    if (!activeStoryboardId || !branchCommits || branchCommits.length === 0) {
-      return;
-    }
-    const sourceCommitId = branchCommits[0].commitId;
-    const approvalTaskId = await createApprovalTaskMutation({
-      storyboardId: activeStoryboardId,
-      taskType: "merge_policy",
-      title: `Cherry-pick ${sourceCommitId}`,
-      rationale: "Producer initiated cherry-pick from Timeline Theater",
-      diffSummary: "Cherry-pick latest commit",
-      payloadJson: JSON.stringify({ sourceCommitId, targetBranchId: defaultBranchId }),
-    });
-    await resolveApprovalTaskMutation({
-      taskId: approvalTaskId,
-      approved: true,
-      justification: "Approved from Timeline Theater",
-    });
-    await cherryPickCommitMutation({
-      storyboardId: activeStoryboardId,
-      sourceCommitId,
-      targetBranchId: defaultBranchId,
-      approvalToken: `approved:${String(approvalTaskId)}`,
-    });
-  }, [
-    activeStoryboardId,
-    branchCommits,
-    cherryPickCommitMutation,
-    createApprovalTaskMutation,
-    defaultBranchId,
-    resolveApprovalTaskMutation,
-  ]);
+  const handleCherryPickCommit = useCallback(
+    async (sourceCommitId: string, targetBranchId: string) => {
+      if (!activeStoryboardId) return;
+      const approvalTaskId = await createApprovalTaskMutation({
+        storyboardId: activeStoryboardId,
+        taskType: "merge_policy",
+        title: `Cherry-pick ${sourceCommitId} → ${targetBranchId}`,
+        rationale: "Producer initiated cherry-pick via Cherry-pick dialog",
+        diffSummary: `Cherry-pick ${sourceCommitId} onto ${targetBranchId}`,
+        payloadJson: JSON.stringify({ sourceCommitId, targetBranchId }),
+      });
+      await resolveApprovalTaskMutation({
+        taskId: approvalTaskId,
+        approved: true,
+        justification: "Approved from Cherry-pick dialog",
+      });
+      await cherryPickCommitMutation({
+        storyboardId: activeStoryboardId,
+        sourceCommitId,
+        targetBranchId,
+        approvalToken: `approved:${String(approvalTaskId)}`,
+      });
+    },
+    [
+      activeStoryboardId,
+      cherryPickCommitMutation,
+      createApprovalTaskMutation,
+      resolveApprovalTaskMutation,
+    ],
+  );
 
   const handleComputeLatestDiff = useCallback(async () => {
     if (!activeStoryboardId || !branchCommits || branchCommits.length < 2) {
@@ -1443,6 +1626,41 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       toCommitId: branchCommits[0].commitId,
     });
   }, [activeStoryboardId, branchCommits, computeSemanticDiffMutation]);
+
+  const handleSetBranchCutTier = useCallback(
+    async (branchId: string, cutTier: CutTier) => {
+      if (!activeStoryboardId) return;
+      await setBranchCutTierMutation({
+        storyboardId: activeStoryboardId,
+        branchId,
+        cutTier,
+      });
+    },
+    [activeStoryboardId, setBranchCutTierMutation],
+  );
+
+  const handleSetCommitReviewRound = useCallback(
+    async (commitId: string, reviewRound?: number) => {
+      if (!activeStoryboardId) return;
+      await setCommitReviewRoundMutation({
+        storyboardId: activeStoryboardId,
+        commitId,
+        reviewRound,
+      });
+    },
+    [activeStoryboardId, setCommitReviewRoundMutation],
+  );
+
+  const handleBumpBranchHeadReviewRound = useCallback(
+    async (branchId: string) => {
+      if (!activeStoryboardId) return;
+      await bumpBranchHeadReviewRoundMutation({
+        storyboardId: activeStoryboardId,
+        branchId,
+      });
+    },
+    [activeStoryboardId, bumpBranchHeadReviewRoundMutation],
+  );
 
   const handleSendMessage = useCallback(
     async (text: string) => {
@@ -1807,6 +2025,11 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
               {saveStatusText}
             </div>
+            <ExportMenu
+              storyboardId={activeStoryboardId ?? ""}
+              storyboardTitle={snapshot?.storyboard?.title ?? "Untitled"}
+              disabled={!activeStoryboardId || !snapshot}
+            />
             <ProductionHubDrawer
               pendingApprovalsCount={pendingApprovalsCount}
               continuityViolationCount={continuityViolationCount}
@@ -1836,12 +2059,18 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               onUpdateDailiesStatus={handleUpdateDailiesStatus}
               onUpdateSimulationRunStatus={handleUpdateSimulationRunStatus}
               onRunCritic={handleRunSimulationCritic}
+              storyboardId={activeStoryboardId ?? ""}
               onCreateBranch={handleCreateBranch}
-              onCherryPickLatest={handleCherryPickLatest}
+              onCherryPickCommit={handleCherryPickCommit}
               onComputeLatestDiff={handleComputeLatestDiff}
+              onSetBranchCutTier={handleSetBranchCutTier}
+              onSetCommitReviewRound={handleSetCommitReviewRound}
+              onBumpBranchHeadReviewRound={handleBumpBranchHeadReviewRound}
               onDetectContradictions={handleDetectContradictions}
+              onRunShotValidators={handleRunShotValidators}
               onResolveViolation={handleResolveViolation}
               onPublishIdentityPack={handlePublishIdentityPack}
+              identityPortraitCallbacks={identityPortraitCallbacks}
             />
           </div>
 
@@ -1853,8 +2082,13 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
                     selectedNode={selectedNode}
                     nodes={nodes}
                     edges={edges}
+                    storyboardId={activeStoryboardId ?? undefined}
                     onGenerateMedia={handleGenerateMedia}
                     onEditNode={handleEditNode}
+                    onUpdateShotMeta={handleUpdateShotMeta}
+                    deliveryVariantCallbacks={deliveryVariantCallbacks}
+                    userIdentity={userIdentity}
+                    reviewCallbacks={reviewCallbacks}
                     isProcessing={isProcessing}
                     onClose={closeInspector}
                   />

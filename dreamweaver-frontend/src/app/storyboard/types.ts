@@ -1,6 +1,78 @@
 import { Node, Edge } from 'reactflow';
+import type { CutTier } from "@/lib/cut-tier";
 
 export type NodeType = "scene" | "shot" | "branch" | "merge" | "character_ref" | "background_ref";
+
+export type ShotSize = "ECU" | "CU" | "MCU" | "MS" | "MLS" | "WS" | "EWS";
+export type ShotAngle = "eye_level" | "high" | "low" | "dutch" | "birds_eye" | "worms_eye";
+export type CameraMove =
+  | "static" | "push_in" | "pull_out" | "dolly" | "track" | "tilt"
+  | "pan" | "whip_pan" | "handheld" | "steadicam" | "crane" | "drone";
+export type AspectRatio = "2.39:1" | "1.85:1" | "16:9" | "9:16" | "4:5" | "1:1" | "2:1";
+export type ScreenDirection = "left_to_right" | "right_to_left" | "neutral";
+
+export interface ShotMeta {
+  number?: string;
+  size?: ShotSize;
+  angle?: ShotAngle;
+  lensMm?: number;
+  tStop?: string;
+  move?: CameraMove;
+  aspect?: AspectRatio;
+  durationS?: number;
+  screenDirection?: ScreenDirection;
+  axisLineId?: string;
+  blockingNotes?: string;
+  props?: string[];
+  sfx?: string[];
+  vfx?: string[];
+}
+
+export const SHOT_SIZE_OPTIONS: Array<{ value: ShotSize; label: string; description: string }> = [
+  { value: "ECU", label: "ECU", description: "Extreme close-up" },
+  { value: "CU", label: "CU", description: "Close-up" },
+  { value: "MCU", label: "MCU", description: "Medium close-up" },
+  { value: "MS", label: "MS", description: "Medium shot" },
+  { value: "MLS", label: "MLS", description: "Medium long shot" },
+  { value: "WS", label: "WS", description: "Wide shot" },
+  { value: "EWS", label: "EWS", description: "Extreme wide shot" },
+];
+
+export const SHOT_ANGLE_OPTIONS: Array<{ value: ShotAngle; label: string }> = [
+  { value: "eye_level", label: "Eye level" },
+  { value: "high", label: "High angle" },
+  { value: "low", label: "Low angle" },
+  { value: "dutch", label: "Dutch / canted" },
+  { value: "birds_eye", label: "Bird's eye" },
+  { value: "worms_eye", label: "Worm's eye" },
+];
+
+export const CAMERA_MOVE_OPTIONS: Array<{ value: CameraMove; label: string }> = [
+  { value: "static", label: "Static / locked off" },
+  { value: "push_in", label: "Push-in" },
+  { value: "pull_out", label: "Pull-out" },
+  { value: "dolly", label: "Dolly" },
+  { value: "track", label: "Track" },
+  { value: "tilt", label: "Tilt" },
+  { value: "pan", label: "Pan" },
+  { value: "whip_pan", label: "Whip pan" },
+  { value: "handheld", label: "Handheld" },
+  { value: "steadicam", label: "Steadicam" },
+  { value: "crane", label: "Crane / jib" },
+  { value: "drone", label: "Drone" },
+];
+
+export const ASPECT_RATIO_OPTIONS: Array<{ value: AspectRatio; label: string; context: string }> = [
+  { value: "2.39:1", label: "2.39:1", context: "Anamorphic scope" },
+  { value: "1.85:1", label: "1.85:1", context: "Flat feature" },
+  { value: "16:9", label: "16:9", context: "TV / streaming" },
+  { value: "9:16", label: "9:16", context: "Vertical / Reels" },
+  { value: "4:5", label: "4:5", context: "IG feed" },
+  { value: "1:1", label: "1:1", context: "Square" },
+  { value: "2:1", label: "2:1", context: "Univisium" },
+];
+
+export const LENS_MM_PRESETS: number[] = [14, 18, 24, 28, 35, 40, 50, 65, 85, 100, 135];
 
 export interface MediaVariant {
   id: string;
@@ -60,6 +132,7 @@ export interface StoryNodeData {
     negativePrompt?: string;
     continuityDirectives: string[];
   };
+  shotMeta?: ShotMeta;
   media: {
     images: MediaVariant[];
     videos: MediaVariant[];
@@ -426,6 +499,7 @@ export interface NarrativeBranchRecord {
   headCommitId?: string;
   isDefault: boolean;
   status: "active" | "archived";
+  cutTier?: CutTier;
   createdAt: number;
   updatedAt: number;
 }
@@ -437,9 +511,29 @@ export interface NarrativeCommitRecord {
   summary: string;
   rationale?: string;
   operationCount: number;
+  operationsJson?: string;
   parentCommitId?: string;
+  reviewRound?: number;
   createdAt: number;
 }
+
+export type { CutTier } from "@/lib/cut-tier";
+export { CUT_TIER_LABELS, CUT_TIER_ORDER } from "@/lib/cut-tier";
+
+export const CUT_TIER_OPTIONS: Array<{
+  value: CutTier;
+  label: string;
+  order: number;
+  tone: "muted" | "info" | "violet" | "amber" | "emerald" | "sky" | "success";
+}> = [
+  { value: "assembly", label: "Assembly", order: 0, tone: "muted" },
+  { value: "editors", label: "Editor's Cut", order: 1, tone: "info" },
+  { value: "directors", label: "Director's Cut", order: 2, tone: "violet" },
+  { value: "producers", label: "Producer's Cut", order: 3, tone: "amber" },
+  { value: "pictureLock", label: "Picture Lock", order: 4, tone: "emerald" },
+  { value: "online", label: "Online / Color", order: 5, tone: "sky" },
+  { value: "delivered", label: "Delivered", order: 6, tone: "success" },
+];
 
 export type StoryNode = Node<StoryNodeData>;
 export type StoryEdge = Edge<StoryEdgeData>;
@@ -490,6 +584,138 @@ export interface ImageConfig {
 export interface VideoConfig {
   aspectRatio: '16:9' | '9:16';
   style?: string;
+}
+
+export type DeliveryPlatform =
+  | "meta" | "tiktok" | "youtube" | "ctv" | "dv360" | "x" | "linkedin" | "other";
+
+export type DeliveryStatus =
+  | "planned" | "in_review" | "approved" | "delivered" | "archived";
+
+export interface DeliveryVariantSpec {
+  aspect?: AspectRatio;
+  durationS?: number;
+  locale?: string;
+  abLabel?: string;
+  platform?: DeliveryPlatform;
+  endCard?: string;
+  notes?: string;
+}
+
+export interface DeliveryVariant {
+  id: string;
+  masterAssetId: string;
+  kind: "image" | "video";
+  sourceUrl: string;
+  generationStatus: "pending" | "completed" | "failed" | "rolled_back";
+  deliveryStatus: DeliveryStatus;
+  variantSpec: DeliveryVariantSpec;
+  createdAt: number;
+  updatedAt: number;
+  modelId?: string;
+}
+
+export const DELIVERY_PLATFORM_OPTIONS: Array<{ value: DeliveryPlatform; label: string }> = [
+  { value: "meta", label: "Meta (FB/IG)" },
+  { value: "tiktok", label: "TikTok" },
+  { value: "youtube", label: "YouTube" },
+  { value: "ctv", label: "CTV" },
+  { value: "dv360", label: "DV360" },
+  { value: "x", label: "X / Twitter" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "other", label: "Other" },
+];
+
+export const DELIVERY_STATUS_OPTIONS: Array<{ value: DeliveryStatus; label: string; tone: "neutral" | "info" | "success" | "muted" | "warn" }> = [
+  { value: "planned",   label: "Planned",    tone: "neutral" },
+  { value: "in_review", label: "In review",  tone: "info" },
+  { value: "approved",  label: "Approved",   tone: "success" },
+  { value: "delivered", label: "Delivered",  tone: "success" },
+  { value: "archived",  label: "Archived",   tone: "muted" },
+];
+
+/**
+ * Canonical session identity passed to review-surface components so author
+ * fields on newly-created comments can be denormalized. The same shape is
+ * re-exported from `StoryboardCopilotBridge` for the agent surface; keeping
+ * the definition here lets non-agent callers import it without pulling the
+ * bridge component into their module graph.
+ */
+export interface UserIdentity {
+  userId: string;
+  email: string | null;
+  name: string | null;
+}
+
+export type TakeStatus = "print" | "hold" | "ng" | "noted";
+
+export interface MediaComment {
+  _id: string;
+  storyboardId: string;
+  mediaAssetId: string;
+  userId: string;
+  authorName?: string;
+  authorEmail?: string;
+  parentCommentId?: string;
+  timecodeMs?: number;
+  body: string;
+  status: "open" | "resolved" | "deleted";
+  resolvedAt?: number;
+  resolvedByUserId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const TAKE_STATUS_OPTIONS: Array<{ value: TakeStatus; label: string; tone: "success" | "info" | "warn" | "muted" }> = [
+  { value: "print", label: "Print",  tone: "success" },
+  { value: "hold",  label: "Hold",   tone: "info" },
+  { value: "ng",    label: "NG",     tone: "warn" },
+  { value: "noted", label: "Noted",  tone: "muted" },
+];
+
+export const COMMON_DELIVERY_DURATIONS_S: number[] = [6, 10, 15, 30, 60, 90];
+export const COMMON_DELIVERY_LOCALES: Array<{ value: string; label: string }> = [
+  { value: "en-US", label: "English (US)" },
+  { value: "en-GB", label: "English (UK)" },
+  { value: "es-MX", label: "Spanish (MX)" },
+  { value: "es-ES", label: "Spanish (ES)" },
+  { value: "fr-FR", label: "French (FR)" },
+  { value: "de-DE", label: "German (DE)" },
+  { value: "pt-BR", label: "Portuguese (BR)" },
+  { value: "ja-JP", label: "Japanese (JP)" },
+  { value: "zh-CN", label: "Chinese (CN)" },
+  { value: "hi-IN", label: "Hindi (IN)" },
+];
+
+// -----------------------------------------------------------------------
+// Identity reference portraits (Enhancement #7)
+// Re-export the pure-lib types so the app has a single source of truth; the
+// `IdentityReferenceRecord` interface below matches the row shape returned
+// by `identityReferences:listIdentityPortraitsForPack` and is what the
+// ContinuityOS panel consumes.
+// -----------------------------------------------------------------------
+
+export type { PortraitView, PortraitRole, IdentityPortrait } from "@/lib/identity-portraits";
+export {
+  PORTRAIT_VIEW_OPTIONS,
+  PORTRAIT_ROLE_OPTIONS,
+  CANONICAL_PORTRAIT_VIEWS,
+} from "@/lib/identity-portraits";
+
+import type { PortraitRole, PortraitView } from "@/lib/identity-portraits";
+
+export interface IdentityReferenceRecord {
+  _id: string;
+  ownerPackId: string;
+  role: PortraitRole;
+  portraitView?: PortraitView;
+  sourceUrl: string;
+  modelId?: string;
+  prompt?: string;
+  notes?: string;
+  status: "active" | "archived";
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface StoryboardMediaConfig {

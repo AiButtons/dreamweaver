@@ -204,6 +204,168 @@ export const detectContradictions = mutation({
   },
 });
 
+// keep in sync with src/lib/continuity-validators/types.ts
+const SHOT_VALIDATOR_CODE_PREFIXES = [
+  "SHOT_AXIS_LINE_BREAK",
+  "SHOT_SCREEN_DIRECTION_REVERSE",
+  "SHOT_THIRTY_DEGREE_RULE",
+  "SHOT_EYELINE_MISMATCH",
+] as const;
+
+export { SHOT_VALIDATOR_CODE_PREFIXES };
+
+export const recordShotValidatorViolations = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.optional(v.string()),
+    violations: v.array(
+      v.object({
+        code: v.string(),
+        severity: riskLevel,
+        message: v.string(),
+        nodeIds: v.array(v.string()),
+        edgeIds: v.array(v.string()),
+        suggestedFix: v.optional(v.string()),
+      }),
+    ),
+    clearCodePrefixes: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const now = Date.now();
+
+    // 1. Soft-clear any existing open rows owned by the shot-validator family.
+    const openRows = await ctx.db
+      .query("continuityViolations")
+      .withIndex("by_storyboard_status_createdAt", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("status", "open"),
+      )
+      .collect();
+    let cleared = 0;
+    for (const row of openRows) {
+      const ownsRow = args.clearCodePrefixes.some((prefix) =>
+        row.code.startsWith(prefix),
+      );
+      if (!ownsRow) continue;
+      await ctx.db.patch(row._id, {
+        status: "resolved",
+        updatedAt: now,
+      });
+      cleared += 1;
+    }
+
+    // 2. Insert fresh violation rows.
+    let inserted = 0;
+    for (let i = 0; i < args.violations.length; i += 1) {
+      const violation = args.violations[i];
+      await ctx.db.insert("continuityViolations", {
+        storyboardId: args.storyboardId,
+        userId,
+        violationId: `${violation.code}_${now}_${i}`,
+        branchId: args.branchId,
+        code: violation.code,
+        severity: violation.severity,
+        status: "open",
+        message: violation.message,
+        nodeIds: violation.nodeIds,
+        edgeIds: violation.edgeIds,
+        suggestedFix: violation.suggestedFix,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { cleared, inserted };
+  },
+});
+
+// keep in sync with src/lib/continuity-critic/types.ts
+const CONTINUITY_CRITIC_CODE_PREFIXES = [
+  "CRITIC_NARRATIVE_TIMELINE",
+  "CRITIC_WARDROBE",
+  "CRITIC_CHARACTER_ARC",
+  "CRITIC_LOCATION",
+  "CRITIC_CONTINUITY_BREAK",
+  "CRITIC_OTHER",
+] as const;
+
+export { CONTINUITY_CRITIC_CODE_PREFIXES };
+
+/**
+ * Persist the LLM continuity-critic results. Mirrors
+ * `recordShotValidatorViolations`: soft-clear stale rows whose `code` starts
+ * with any of the critic prefixes, then insert the fresh batch. Violations
+ * owned by other families (deterministic shot validators, legacy regex
+ * detector) are untouched.
+ */
+export const recordContinuityCriticViolations = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    branchId: v.optional(v.string()),
+    violations: v.array(
+      v.object({
+        code: v.string(),
+        severity: riskLevel,
+        message: v.string(),
+        nodeIds: v.array(v.string()),
+        edgeIds: v.array(v.string()),
+        suggestedFix: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const now = Date.now();
+
+    // 1. Soft-clear any existing open rows owned by the critic family.
+    const openRows = await ctx.db
+      .query("continuityViolations")
+      .withIndex("by_storyboard_status_createdAt", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("status", "open"),
+      )
+      .collect();
+    let cleared = 0;
+    for (const row of openRows) {
+      const ownsRow = CONTINUITY_CRITIC_CODE_PREFIXES.some((prefix) =>
+        row.code.startsWith(prefix),
+      );
+      if (!ownsRow) continue;
+      await ctx.db.patch(row._id, {
+        status: "resolved",
+        updatedAt: now,
+      });
+      cleared += 1;
+    }
+
+    // 2. Insert fresh violation rows.
+    let inserted = 0;
+    for (let i = 0; i < args.violations.length; i += 1) {
+      const violation = args.violations[i];
+      await ctx.db.insert("continuityViolations", {
+        storyboardId: args.storyboardId,
+        userId,
+        violationId: `${violation.code}_${now}_${i}`,
+        branchId: args.branchId,
+        code: violation.code,
+        severity: violation.severity,
+        status: "open",
+        message: violation.message,
+        nodeIds: violation.nodeIds,
+        edgeIds: violation.edgeIds,
+        suggestedFix: violation.suggestedFix,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { cleared, inserted };
+  },
+});
+
 export const resolveViolation = mutation({
   args: {
     storyboardId: v.id("storyboards"),

@@ -206,7 +206,7 @@ describe("Storyboard shell integration", () => {
         onUpdateSimulationRunStatus={async () => {}}
         onRunCritic={async () => {}}
         onCreateBranch={async () => {}}
-        onCherryPickLatest={async () => {}}
+        onCherryPickCommit={async (_s: string, _t: string) => {}}
         onComputeLatestDiff={async () => {}}
         onDetectContradictions={async () => {}}
       />,
