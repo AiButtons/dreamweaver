@@ -28,6 +28,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
+    // Be tolerant of casing — the `Modality` enum values are uppercase, but
+    // historical callers (and the ViMax post-processor) pass lowercase
+    // strings like "image"/"video"/"audio". Normalize so the switch matches.
+    const normalizedType = typeof type === 'string' ? type.toUpperCase() : type;
+
     const provider = LLMFactory.getProvider();
     let result = '';
 
@@ -41,7 +46,7 @@ export async function POST(req: NextRequest) {
       if (!cfg.inputImage) cfg.inputImage = referenceImageUrls[0];
     }
 
-    switch (type) {
+    switch (normalizedType) {
         case Modality.IMAGE:
             if (cfg.imageModelId && !cfg.modelId) cfg.modelId = cfg.imageModelId;
             result = await provider.generateImage(prompt, cfg);
@@ -55,7 +60,10 @@ export async function POST(req: NextRequest) {
             result = await provider.generateVideo(prompt, cfg);
             break;
         default:
-            return NextResponse.json({ error: 'Invalid type' }, { status: 400 });
+            return NextResponse.json(
+              { error: `Invalid type "${type}" — expected one of IMAGE, VIDEO, AUDIO` },
+              { status: 400 },
+            );
     }
 
     return NextResponse.json({ url: result });

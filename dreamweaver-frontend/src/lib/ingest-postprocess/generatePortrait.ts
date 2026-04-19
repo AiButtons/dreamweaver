@@ -31,7 +31,10 @@ export async function generatePortraitImage(options: {
       },
       body: JSON.stringify({
         prompt,
-        type: "image",
+        // Upper-case to match `Modality.IMAGE` in @/lib/llm/types. The route
+        // does not case-normalize `type`, so "image" → 400 "Invalid type" and
+        // every portrait silently dropped out of the pipeline.
+        type: "IMAGE",
         config: { aspect_ratio: "9:16" },
         reference_image_urls:
           referenceImageUrls && referenceImageUrls.length > 0
