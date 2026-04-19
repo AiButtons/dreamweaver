@@ -19,8 +19,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from viMax_port.idea_ingester import ingest_idea
+from viMax_port.novel_ingester import ingest_novel
 from viMax_port.screenplay_ingester import ingest_screenplay
-from viMax_port.types import IngestionResult
+from viMax_port.types import IngestionResult, NovelIngestionResult
 
 
 router = APIRouter()
@@ -39,6 +40,15 @@ class IdeaIngestRequest(BaseModel):
     idea: str = Field(min_length=5, max_length=4_000)
     style: str = Field(max_length=200)
     userRequirement: str = Field(default="", max_length=1000)
+    mediaBaseUrl: str = Field(default="http://localhost:3000")
+
+
+class NovelIngestRequest(BaseModel):
+    storyboardId: str
+    novel: str = Field(min_length=200, max_length=500_000)
+    style: str = Field(max_length=200)
+    userRequirement: str = Field(default="", max_length=1000)
+    targetEpisodeCount: Optional[int] = Field(default=None, ge=1, le=10)
     mediaBaseUrl: str = Field(default="http://localhost:3000")
 
 
@@ -235,6 +245,76 @@ async def idea_ingest_stream(
             idea=payload.idea,
             style=payload.style,
             user_requirement=payload.userRequirement,
+            media_base_url=payload.mediaBaseUrl,
+            auth_token=token,
+            event_emitter=emitter,
+        )
+
+    return StreamingResponse(
+        _run_with_event_stream(factory),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Novel2Video — blocking + streaming endpoints (M3 #3)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/novel-ingest",
+    response_model=NovelIngestionResult,
+    response_model_exclude_none=True,
+)
+async def novel_ingest(
+    payload: NovelIngestRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> NovelIngestionResult:
+    """M3 #3 blocking Novel2Video. Chains novel_compressor → episode_splitter
+    → per-episode screenplay design + decomposition + mapper, reusing a
+    single globally-extracted character set across every episode's shot
+    graph. Next.js fulfills portraits + writes Convex (identity packs +
+    per-episode branches + nodes + edges)."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer auth token")
+    token = authorization.split(" ", 1)[1]
+    try:
+        return await ingest_novel(
+            storyboard_id=payload.storyboardId,
+            novel_text=payload.novel,
+            style=payload.style,
+            user_requirement=payload.userRequirement,
+            target_episode_count=payload.targetEpisodeCount,
+            media_base_url=payload.mediaBaseUrl,
+            auth_token=token,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Novel ingestion failed: {exc}")
+
+
+@router.post("/novel-ingest-stream")
+async def novel_ingest_stream(
+    payload: NovelIngestRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> StreamingResponse:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer auth token")
+    token = authorization.split(" ", 1)[1]
+
+    async def factory(emitter):
+        return await ingest_novel(
+            storyboard_id=payload.storyboardId,
+            novel_text=payload.novel,
+            style=payload.style,
+            user_requirement=payload.userRequirement,
+            target_episode_count=payload.targetEpisodeCount,
             media_base_url=payload.mediaBaseUrl,
             auth_token=token,
             event_emitter=emitter,
