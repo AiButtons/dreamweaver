@@ -459,6 +459,11 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const publishIdentityPackMutation = useMutation(mutationRef("continuityOS:publishIdentityPack"));
   const addIdentityPortraitMutation = useMutation(mutationRef("identityReferences:addIdentityPortrait"));
   const addCameoReferenceMutation = useMutation(mutationRef("identityReferences:addCameoReference"));
+  // Short-lived upload URL for the cameo PNG blob (Convex storage).
+  // Replaces the M3 #6 data-URL MVP so large cameos don't hit Convex's
+  // ~1MB string cap and shot renders don't ship the full base64 payload
+  // as an I2I reference.
+  const generateCameoUploadUrlMutation = useMutation(mutationRef("storage:generateCameoUploadUrl"));
   const removeIdentityReferenceMutation = useMutation(mutationRef("identityReferences:removeIdentityReference"));
   const createBranchMutation = useMutation(mutationRef("narrativeGit:createBranch"));
   const cherryPickCommitMutation = useMutation(mutationRef("narrativeGit:cherryPickCommit"));
@@ -2227,10 +2232,28 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
             packName: typeof pack.name === "string" && pack.name.length > 0 ? pack.name : "Unnamed pack",
           }))}
           onSubmit={async (payload) => {
+            // Upload the watermarked PNG to Convex storage first, then
+            // pass the storage id to the cameo mutation. The mutation
+            // resolves the id to a CDN URL and stores both, so the shot-
+            // batch selector can pick it up like any other portrait.
+            const uploadUrl = (await generateCameoUploadUrlMutation({})) as string;
+            const uploadRes = await fetch(uploadUrl, {
+              method: "POST",
+              headers: { "Content-Type": "image/png" },
+              body: payload.watermarkedBlob,
+            });
+            if (!uploadRes.ok) {
+              throw new Error(
+                `Cameo upload failed (${uploadRes.status}) — please retry.`,
+              );
+            }
+            const { storageId } = (await uploadRes.json()) as {
+              storageId: string;
+            };
             await addCameoReferenceMutation({
               storyboardId: activeStoryboardId as Parameters<typeof addCameoReferenceMutation>[0]["storyboardId"],
               ownerPackId: payload.ownerPackId as Parameters<typeof addCameoReferenceMutation>[0]["ownerPackId"],
-              sourceUrl: payload.watermarkedDataUrl,
+              cameoStorageId: storageId as Parameters<typeof addCameoReferenceMutation>[0]["cameoStorageId"],
               consentStatus: payload.consentStatus,
               watermarkApplied: payload.watermarkApplied,
               attributionText: payload.attributionText,

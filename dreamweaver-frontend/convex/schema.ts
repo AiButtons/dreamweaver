@@ -672,6 +672,13 @@ export default defineSchema({
     attributionText: v.optional(v.string()),
     uploadedByUserId: v.optional(v.string()),
     cameoSourcePhotoHash: v.optional(v.string()),
+    // Optional back-reference to the Convex `_storage` row that holds
+    // the watermarked PNG bytes. Present when the cameo was uploaded
+    // via `storage:generateCameoUploadUrl`; absent on legacy rows that
+    // stored the image inline as a data URL. When present, read-path
+    // code may refresh `sourceUrl` by re-resolving the storage id
+    // (e.g. if the CDN URL rotates).
+    cameoStorageId: v.optional(v.id("_storage")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

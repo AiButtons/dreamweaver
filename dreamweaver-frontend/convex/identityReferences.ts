@@ -80,7 +80,12 @@ export const addCameoReference = mutation({
   args: {
     storyboardId: v.id("storyboards"),
     ownerPackId: v.id("identityPacks"),
-    sourceUrl: v.string(),
+    // Either `sourceUrl` (legacy data-URL MVP) or `cameoStorageId` (new
+    // Convex storage path) must be provided. The storage path is
+    // preferred; when both are set the storage id wins and sourceUrl is
+    // re-resolved to the CDN URL before the row is written.
+    sourceUrl: v.optional(v.string()),
+    cameoStorageId: v.optional(v.id("_storage")),
     consentStatus: v.union(
       v.literal("pending"),
       v.literal("approved"),
@@ -116,6 +121,24 @@ export const addCameoReference = mutation({
       throw new ConvexError("Cameo references require a valid photo hash.");
     }
 
+    // Resolve source URL — prefer Convex storage over legacy data-URL.
+    let sourceUrl: string;
+    if (args.cameoStorageId) {
+      const resolved = await ctx.storage.getUrl(args.cameoStorageId);
+      if (!resolved) {
+        throw new ConvexError(
+          "Cameo storage id could not be resolved — was the upload completed?",
+        );
+      }
+      sourceUrl = resolved;
+    } else if (args.sourceUrl && args.sourceUrl.length > 0) {
+      sourceUrl = args.sourceUrl;
+    } else {
+      throw new ConvexError(
+        "addCameoReference requires either sourceUrl or cameoStorageId",
+      );
+    }
+
     const now = Date.now();
     const insertedId = await ctx.db.insert("identityReferenceAssets", {
       storyboardId: args.storyboardId,
@@ -123,7 +146,7 @@ export const addCameoReference = mutation({
       ownerPackId: args.ownerPackId,
       role: "cameo_reference",
       portraitView: "custom",
-      sourceUrl: args.sourceUrl,
+      sourceUrl,
       notes: args.notes,
       status: "active",
       consentStatus: args.consentStatus,
@@ -131,6 +154,7 @@ export const addCameoReference = mutation({
       attributionText: attribution,
       uploadedByUserId: userId,
       cameoSourcePhotoHash: photoHash,
+      cameoStorageId: args.cameoStorageId,
       createdAt: now,
       updatedAt: now,
     });

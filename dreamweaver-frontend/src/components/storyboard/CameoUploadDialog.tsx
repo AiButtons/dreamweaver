@@ -34,20 +34,24 @@ import {
   loadFileAsImage,
 } from "@/lib/cameo";
 
+export interface CameoSubmitPayload {
+  ownerPackId: string;
+  /** The watermarked PNG bytes. Parent uploads this via Convex storage
+   *  and passes back the storage id to the cameo mutation. */
+  watermarkedBlob: Blob;
+  attributionText: string;
+  cameoSourcePhotoHash: string;
+  watermarkApplied: true;
+  consentStatus: "approved";
+}
+
 export interface CameoUploadDialogProps {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   /** Identity packs the producer can attach the cameo to. */
   packOptions: Array<{ packRowId: string; packName: string }>;
   /** Called once the producer submits a validated cameo. */
-  onSubmit: (payload: {
-    ownerPackId: string;
-    watermarkedDataUrl: string;
-    attributionText: string;
-    cameoSourcePhotoHash: string;
-    watermarkApplied: true;
-    consentStatus: "approved";
-  }) => Promise<void>;
+  onSubmit: (payload: CameoSubmitPayload) => Promise<void>;
 }
 
 export function CameoUploadDialog({
@@ -61,7 +65,11 @@ export function CameoUploadDialog({
   const [consentChecked, setConsentChecked] = useState<boolean>(false);
   const [packRowId, setPackRowId] = useState<string>("");
   const [watermarkedPreviewUrl, setWatermarkedPreviewUrl] = useState<string | null>(null);
-  const [watermarkedDataUrl, setWatermarkedDataUrl] = useState<string | null>(null);
+  // The watermarked blob is kept in state so submit can hand it off to
+  // the parent without re-running the watermark pass. Data-URL encoding
+  // is no longer used on the happy path — the blob goes straight to
+  // Convex storage.
+  const [watermarkedBlob, setWatermarkedBlob] = useState<Blob | null>(null);
   const [sourceHash, setSourceHash] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +85,7 @@ export function CameoUploadDialog({
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
-    setWatermarkedDataUrl(null);
+    setWatermarkedBlob(null);
     setSourceHash(null);
     setError(null);
     setBusy(false);
@@ -107,8 +115,7 @@ export function CameoUploadDialog({
 
       const img = await loadFileAsImage(file);
       const watermarked = await applyCameoWatermark(img, { label });
-      const dataUrl = await blobToDataUrl(watermarked);
-      setWatermarkedDataUrl(dataUrl);
+      setWatermarkedBlob(watermarked);
 
       setWatermarkedPreviewUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
@@ -126,18 +133,18 @@ export function CameoUploadDialog({
     Boolean(file) &&
     attribution.trim().length > 0 &&
     consentChecked &&
-    Boolean(watermarkedDataUrl) &&
+    Boolean(watermarkedBlob) &&
     Boolean(sourceHash) &&
     !busy;
 
   const submit = async () => {
-    if (!canSubmit || !watermarkedDataUrl || !sourceHash) return;
+    if (!canSubmit || !watermarkedBlob || !sourceHash) return;
     setBusy(true);
     setError(null);
     try {
       await onSubmit({
         ownerPackId: packRowId,
-        watermarkedDataUrl,
+        watermarkedBlob,
         attributionText: attribution.trim(),
         cameoSourcePhotoHash: sourceHash,
         watermarkApplied: true,
@@ -196,7 +203,7 @@ export function CameoUploadDialog({
               onChange={(e) => {
                 const next = e.target.files?.[0] ?? null;
                 setFile(next);
-                setWatermarkedDataUrl(null);
+                setWatermarkedBlob(null);
                 setSourceHash(null);
                 setWatermarkedPreviewUrl((prev) => {
                   if (prev) URL.revokeObjectURL(prev);
@@ -294,16 +301,3 @@ export function CameoUploadDialog({
   );
 }
 
-const blobToDataUrl = (blob: Blob): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error("Unexpected FileReader result type."));
-      }
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed."));
-    reader.readAsDataURL(blob);
-  });
