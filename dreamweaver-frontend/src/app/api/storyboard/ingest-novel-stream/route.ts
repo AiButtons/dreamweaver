@@ -155,6 +155,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         send("ping", { elapsedMs: Date.now() - startedAt });
       }, HEARTBEAT_INTERVAL_MS);
 
+      // P0 QA: track the storyboard we create so the finally block can
+      // trash it if the pipeline never reaches a successful done event.
+      let createdStoryboardId: string | null = null;
+      let ingestSucceeded = false;
+
       try {
         send("open", { ok: true, mode: "novel" });
 
@@ -170,6 +175,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             mutationRef("storyboards:createStoryboard"),
             { title, mode: "agent_draft" },
           )) as string;
+          createdStoryboardId = storyboardId;
         } catch (err) {
           const msg = err instanceof Error ? err.message : "createStoryboard failed";
           send("error", { message: msg });
@@ -569,11 +575,24 @@ export async function POST(request: NextRequest): Promise<Response> {
           novelLength: pythonResult.novelLength,
           compressedNarrativeLength: pythonResult.compressedNarrativeLength,
         });
+        ingestSucceeded = totalShotsWritten > 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         send("error", { message: msg });
       } finally {
         clearInterval(heartbeat);
+        // Orphan cleanup (matches ingest-stream): trash the storyboard row
+        // on any non-success exit so the library doesn't accumulate
+        // "0 nodes" cards from failed / aborted runs.
+        if (!ingestSucceeded && createdStoryboardId) {
+          try {
+            await client.mutation(mutationRef("storyboards:trashStoryboard"), {
+              storyboardId: createdStoryboardId as Id<"storyboards">,
+            });
+          } catch {
+            // best-effort
+          }
+        }
         close();
       }
     },

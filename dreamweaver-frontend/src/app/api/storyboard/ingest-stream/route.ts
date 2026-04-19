@@ -27,6 +27,7 @@
 
 import { NextRequest } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
+import type { Id } from "../../../../../convex/_generated/dataModel";
 import { getToken } from "@/lib/auth-server";
 import { mutationRef } from "@/lib/convexRefs";
 import {
@@ -146,6 +147,13 @@ export async function POST(request: NextRequest): Promise<Response> {
         send("ping", { elapsedMs: Date.now() - startedAt });
       }, HEARTBEAT_INTERVAL_MS);
 
+      // P0 QA: if we create a storyboard row but the pipeline later aborts
+      // (timeout, Python crash, network blip), we were leaving an orphan
+      // "0 nodes, 0 images" card in the library. Track the id here so the
+      // finally block can trash it on any non-success exit.
+      let createdStoryboardId: string | null = null;
+      let ingestSucceeded = false;
+
       try {
         send("open", { ok: true, mode });
 
@@ -161,6 +169,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             mutationRef("storyboards:createStoryboard"),
             { title, mode: "agent_draft" },
           )) as string;
+          createdStoryboardId = storyboardId;
         } catch (err) {
           const msg = err instanceof Error ? err.message : "createStoryboard failed";
           send("error", { message: msg });
@@ -293,11 +302,31 @@ export async function POST(request: NextRequest): Promise<Response> {
           totalDurationMs,
           preprocessed: pythonResult.preprocessed,
         });
+        // Only mark success once the done event has been sent — any earlier
+        // `return;` path (e.g. Python returned non-200) leaves
+        // `ingestSucceeded = false` so the finally block trashes the
+        // orphan. We also only treat a run as successful if at least one
+        // node landed; a storyboard with 0 nodes is still useless to the
+        // producer.
+        ingestSucceeded = outcome.nodeCount > 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         send("error", { message: msg });
       } finally {
         clearInterval(heartbeat);
+        // Orphan cleanup: if we never reached a successful done, trash the
+        // storyboard row we created so the library page doesn't fill up
+        // with empty "0 nodes" cards. Best-effort — if the trash mutation
+        // itself errors we swallow it; the user can always trash manually.
+        if (!ingestSucceeded && createdStoryboardId) {
+          try {
+            await client.mutation(mutationRef("storyboards:trashStoryboard"), {
+              storyboardId: createdStoryboardId as Id<"storyboards">,
+            });
+          } catch {
+            // ignore — nothing actionable the user can do about this
+          }
+        }
         close();
       }
     },
