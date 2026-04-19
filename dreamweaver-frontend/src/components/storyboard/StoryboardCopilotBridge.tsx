@@ -153,6 +153,16 @@ export type GenerateShotBatchInput = {
   concurrency: number;
 };
 
+export type GenerateShotVideoBatchInput = {
+  storyboardId: string;
+  branchId: string;
+  nodeCount: number;
+  rationale: string;
+  skipExisting: boolean;
+  concurrency: number;
+  videoModelId: string;
+};
+
 /**
  * CustomEvent name the bridge dispatches to kick off the batch button. The
  * `GenerateAllShotsButton` listens for this on `window` so the agent doesn't
@@ -173,6 +183,35 @@ const dispatchShotBatchTrigger = (detail: ShotBatchTriggerDetail): void => {
   }
   window.dispatchEvent(
     new CustomEvent<ShotBatchTriggerDetail>(SHOT_BATCH_TRIGGER_EVENT, { detail }),
+  );
+};
+
+/**
+ * M5 — distinct event name for the video batch so the image button and
+ * video button can subscribe independently. Mirrors
+ * `SHOT_BATCH_TRIGGER_EVENT` but carries an optional `videoModelId`.
+ */
+export const SHOT_VIDEO_BATCH_TRIGGER_EVENT =
+  "storyboard:generate-shot-video-batch";
+
+export type ShotVideoBatchTriggerDetail = {
+  storyboardId: string;
+  skipExisting: boolean;
+  concurrency: number;
+  videoModelId?: string;
+};
+
+const dispatchShotVideoBatchTrigger = (
+  detail: ShotVideoBatchTriggerDetail,
+): void => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent<ShotVideoBatchTriggerDetail>(
+      SHOT_VIDEO_BATCH_TRIGGER_EVENT,
+      { detail },
+    ),
   );
 };
 
@@ -248,6 +287,46 @@ const parseGenerateShotBatchInput = (value: unknown): GenerateShotBatchInput | n
     rationale,
     skipExisting,
     concurrency,
+  };
+};
+
+const parseGenerateShotVideoBatchInput = (
+  value: unknown,
+): GenerateShotVideoBatchInput | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const storyboardId =
+    typeof value.storyboardId === "string" ? value.storyboardId : "";
+  const branchId = typeof value.branchId === "string" ? value.branchId : "main";
+  const rationale = typeof value.rationale === "string" ? value.rationale : "";
+  const nodeCount =
+    typeof value.nodeCount === "number" && Number.isFinite(value.nodeCount)
+      ? Math.max(0, Math.floor(value.nodeCount))
+      : 0;
+  const skipExisting =
+    typeof value.skipExisting === "boolean" ? value.skipExisting : true;
+  const concurrencyRaw =
+    typeof value.concurrency === "number" && Number.isFinite(value.concurrency)
+      ? Math.floor(value.concurrency)
+      : 2;
+  // Video batch caps at 4 (vs 6 for image) — see Python tool rationale.
+  const concurrency = Math.max(1, Math.min(4, concurrencyRaw));
+  const videoModelId =
+    typeof value.videoModelId === "string" && value.videoModelId.length > 0
+      ? value.videoModelId
+      : "ltx-2.3";
+  if (!storyboardId) {
+    return null;
+  }
+  return {
+    storyboardId,
+    branchId,
+    nodeCount,
+    rationale,
+    skipExisting,
+    concurrency,
+    videoModelId,
   };
 };
 
@@ -2091,6 +2170,116 @@ export function StoryboardCopilotBridge({
     },
   });
 
+  useHumanInTheLoop({
+    name: "request_generate_shot_video_batch",
+    description:
+      "Approve/edit/reject kicking off the Generate-All-Videos (LTX-2.3 I2V) batch on the current storyboard.",
+    parameters: [
+      { name: "storyboardId", type: "string", description: "Storyboard id", required: true },
+      { name: "branchId", type: "string", description: "Branch id (main by default)", required: true },
+      { name: "nodeCount", type: "number", description: "Total shot count", required: true },
+      { name: "rationale", type: "string", description: "Why batch now", required: true },
+      { name: "skipExisting", type: "boolean", description: "Skip shots that already have an active video", required: false },
+      { name: "concurrency", type: "number", description: "Parallel workers (1-4)", required: false },
+      { name: "videoModelId", type: "string", description: "ltx-2.3 | ltx-2 | veo-3.1", required: false },
+    ],
+    render: ({ args, status, respond }) => {
+      if (status !== "executing" || !respond) {
+        return <></>;
+      }
+      const input = parseGenerateShotVideoBatchInput(args);
+      if (!input) {
+        return (
+          <ToolStatusCard
+            name="request_generate_shot_video_batch"
+            status="failed"
+            args={JSON.stringify(args ?? {}, null, 2)}
+            result={JSON.stringify({ error: "Invalid shot video batch payload" })}
+          />
+        );
+      }
+      const isOnTargetStoryboard =
+        Boolean(storyboardId) && storyboardId === input.storyboardId;
+      const subtitle = `${input.nodeCount} shot${input.nodeCount === 1 ? "" : "s"} · ${input.videoModelId} · concurrency ${input.concurrency} · skipExisting ${input.skipExisting ? "on" : "off"}${isOnTargetStoryboard ? "" : " · will navigate"}`;
+
+      const startBatch = () => {
+        const detail: ShotVideoBatchTriggerDetail = {
+          storyboardId: input.storyboardId,
+          skipExisting: input.skipExisting,
+          concurrency: input.concurrency,
+          videoModelId: input.videoModelId,
+        };
+        if (isOnTargetStoryboard) {
+          dispatchShotVideoBatchTrigger(detail);
+          return { navigated: false, dispatched: true };
+        }
+        // Cross-storyboard: navigate to the editor and let the video
+        // button's mount-time event listener pick up the run. (Unlike
+        // the image batch, we don't need query-param replay because the
+        // video button isn't gated on `?triggerBatch=1` — it just fires
+        // via the event each approval.)
+        router.push(`/storyboard/${encodeURIComponent(input.storyboardId)}`);
+        // Fire the event after a small tick so the new page's button
+        // listener has mounted.
+        window.setTimeout(() => dispatchShotVideoBatchTrigger(detail), 600);
+        return { navigated: true, dispatched: true };
+      };
+
+      return (
+        <ApprovalCard
+          title="Generate all shot videos"
+          subtitle={subtitle}
+          body={
+            input.rationale ||
+            "Render an I2V clip per shot using each shot's existing image as keyframe 0."
+          }
+          onApprove={async () => {
+            const outcome = startBatch();
+            await auditToolCall({
+              tool: "request_generate_shot_video_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+                videoModelId: input.videoModelId,
+                navigated: outcome.navigated,
+              },
+            });
+            respond({ approved: true, ...outcome });
+          }}
+          onEdit={async () => {
+            const outcome = startBatch();
+            await auditToolCall({
+              tool: "request_generate_shot_video_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+                videoModelId: input.videoModelId,
+                navigated: outcome.navigated,
+                edited: true,
+              },
+            });
+            respond({ approved: true, edited: true, ...outcome });
+          }}
+          onReject={async () => {
+            await auditToolCall({
+              tool: "request_generate_shot_video_batch",
+              result: "blocked",
+              details: { storyboardId: input.storyboardId },
+            });
+            respond({
+              approved: false,
+              blockedReason: "Producer rejected shot video batch.",
+            });
+          }}
+        />
+      );
+    },
+  });
+
   return (
     <>
       <CopilotActionRegistration name="propose_branch" />
@@ -2115,6 +2304,7 @@ export function StoryboardCopilotBridge({
       <CopilotActionRegistration name="recommend_ingestion_path" />
       <CopilotActionRegistration name="request_ingestion_run" />
       <CopilotActionRegistration name="request_generate_shot_batch" />
+      <CopilotActionRegistration name="request_generate_shot_video_batch" />
       <CopilotSidebar
         defaultOpen={false}
         clickOutsideToClose

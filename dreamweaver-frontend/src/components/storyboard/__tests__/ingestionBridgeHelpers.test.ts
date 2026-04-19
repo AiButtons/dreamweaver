@@ -116,3 +116,23 @@ describe("buildShotBatchNavHref", () => {
     expect(href).toMatch(/^\/storyboard\/sb%20with%20spaces%2Fslash\?/);
   });
 });
+
+// M5 — the video batch event and image batch event carry different
+// payload shapes (video adds videoModelId). Confirm the constants are
+// distinct strings so a single window-level listener on the image event
+// never fires for a video approval.
+describe("SHOT_*_BATCH_TRIGGER_EVENT constants", () => {
+  it("are distinct event names", async () => {
+    const {
+      SHOT_BATCH_TRIGGER_EVENT,
+      SHOT_VIDEO_BATCH_TRIGGER_EVENT,
+    } = await import("@/components/storyboard/StoryboardCopilotBridge");
+    expect(SHOT_BATCH_TRIGGER_EVENT).not.toBe(SHOT_VIDEO_BATCH_TRIGGER_EVENT);
+    // Prefix sanity: both should live under `storyboard:` so a
+    // wildcard subscriber can filter them cleanly.
+    expect(SHOT_BATCH_TRIGGER_EVENT.startsWith("storyboard:")).toBe(true);
+    expect(SHOT_VIDEO_BATCH_TRIGGER_EVENT.startsWith("storyboard:")).toBe(
+      true,
+    );
+  });
+});

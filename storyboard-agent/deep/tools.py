@@ -441,6 +441,50 @@ def request_generate_shot_batch(
 
 
 @tool
+def request_generate_shot_video_batch(
+    storyboard_id: str,
+    branch_id: str,
+    node_count: int,
+    rationale: str,
+    skip_existing: bool = True,
+    concurrency: int = 2,
+    video_model_id: str = "ltx-2.3",
+) -> Dict[str, Any]:
+    """Requests human approval to run the Generate-All-Videos batch. Interrupt target.
+
+    Triggers the per-shot image-to-video batch (LTX-2.3 I2V with each shot's
+    already-generated image as keyframe 0). Shots without an active image are
+    skipped by the pipeline — the producer should run the image batch first.
+
+    ``concurrency`` is capped in [1, 4] because LTX-2.3 takes 60-180s per shot
+    and higher worker counts race the 30-min stale-mediaAsset sweeper.
+
+    ``video_model_id`` accepts ``ltx-2.3`` (default, I2V + keyframe + retake),
+    ``ltx-2`` (legacy), or ``veo-3.1``.
+    """
+    safe_concurrency = max(
+        1,
+        min(4, int(concurrency) if isinstance(concurrency, (int, float)) else 2),
+    )
+    safe_node_count = max(0, int(node_count) if isinstance(node_count, (int, float)) else 0)
+    model_norm = (video_model_id or "").strip() or "ltx-2.3"
+    return {
+        "schemaVersion": "v2",
+        "action": "request_generate_shot_video_batch",
+        "status": "waiting_for_human",
+        "input": {
+            "storyboardId": storyboard_id,
+            "branchId": branch_id,
+            "nodeCount": safe_node_count,
+            "rationale": " ".join(rationale.split())[:1200],
+            "skipExisting": bool(skip_existing),
+            "concurrency": safe_concurrency,
+            "videoModelId": model_norm,
+        },
+    }
+
+
+@tool
 def repair_plan(
     storyboard_id: str,
     branch_id: str,
@@ -988,6 +1032,7 @@ ALL_TOOLS = [
     approve_repair_plan,
     request_ingestion_run,
     request_generate_shot_batch,
+    request_generate_shot_video_batch,
     select_agent_team,
     create_agent_team,
     update_agent_team_member,
@@ -1021,6 +1066,7 @@ SUPERVISOR_CORE_TOOLS = [
     approve_repair_plan,
     request_ingestion_run,
     request_generate_shot_batch,
+    request_generate_shot_video_batch,
     select_agent_team,
 ]
 
@@ -1042,6 +1088,7 @@ DEFAULT_RUNTIME_ALLOWLIST: List[str] = [
     "branch.merge",
     "ingestion.run",
     "shot_batch.run",
+    "shot_video_batch.run",
 ]
 
 TOOL_POLICY_TOKENS: Dict[str, str] = {
@@ -1064,6 +1111,7 @@ TOOL_POLICY_TOKENS: Dict[str, str] = {
     recommend_ingestion_path.name: "ingestion.run",
     request_ingestion_run.name: "ingestion.run",
     request_generate_shot_batch.name: "shot_batch.run",
+    request_generate_shot_video_batch.name: "shot_video_batch.run",
     select_agent_team.name: "team.manage",
     create_agent_team.name: "team.manage",
     update_agent_team_member.name: "team.manage",

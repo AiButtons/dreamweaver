@@ -14,6 +14,10 @@ import React, { useEffect } from "react";
 import { Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShotBatchStream, type ShotBatchPhase } from "@/lib/sse-ingest";
+import {
+  SHOT_VIDEO_BATCH_TRIGGER_EVENT,
+  type ShotVideoBatchTriggerDetail,
+} from "@/components/storyboard/StoryboardCopilotBridge";
 
 interface GenerateAllVideosButtonProps {
   storyboardId: string;
@@ -28,19 +32,6 @@ const PHASE_CLASS: Record<ShotBatchPhase, string> = {
   succeeded: "bg-emerald-500/60 border-emerald-500",
   failed: "bg-rose-500/60 border-rose-500",
   skipped: "bg-slate-500/40 border-slate-500/60",
-};
-
-// Window event the agent bridge dispatches after the producer approves
-// `request_generate_shot_video_batch`. Distinct from the image trigger so
-// chat-driven flows can target either pipeline cleanly.
-export const SHOT_VIDEO_BATCH_TRIGGER_EVENT =
-  "storyboard:generate-shot-video-batch";
-
-export type ShotVideoBatchTriggerDetail = {
-  storyboardId: string;
-  skipExisting?: boolean;
-  concurrency?: number;
-  videoModelId?: string;
 };
 
 export function GenerateAllVideosButton({

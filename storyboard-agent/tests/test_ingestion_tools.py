@@ -20,6 +20,7 @@ from deep.tools import (
     is_tool_allowed,
     recommend_ingestion_path,
     request_generate_shot_batch,
+    request_generate_shot_video_batch,
     request_ingestion_run,
 )
 
@@ -175,6 +176,71 @@ class RequestGenerateShotBatchTests(unittest.TestCase):
         self.assertEqual(payload["action"], "request_generate_shot_batch")
 
 
+class RequestGenerateShotVideoBatchTests(unittest.TestCase):
+    def test_shape_is_waiting_for_human(self) -> None:
+        payload = request_generate_shot_video_batch.invoke(
+            {
+                "storyboard_id": "sb_42",
+                "branch_id": "br_main",
+                "node_count": 8,
+                "rationale": "Images are in, animate them.",
+            }
+        )
+        self.assertEqual(payload["status"], "waiting_for_human")
+        self.assertEqual(payload["action"], "request_generate_shot_video_batch")
+        self.assertEqual(payload["input"]["videoModelId"], "ltx-2.3")
+
+    def test_clamps_concurrency_to_four(self) -> None:
+        # Video concurrency caps at 4 (vs. 6 for images) because LTX-2.3
+        # takes 60-180s per shot and higher worker counts race the
+        # 30-min stale-mediaAsset sweeper.
+        payload = request_generate_shot_video_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 10,
+                "rationale": "Render all videos.",
+                "concurrency": 99,
+            }
+        )
+        self.assertEqual(payload["input"]["concurrency"], 4)
+
+    def test_default_concurrency_is_two(self) -> None:
+        payload = request_generate_shot_video_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 10,
+                "rationale": "",
+            }
+        )
+        self.assertEqual(payload["input"]["concurrency"], 2)
+
+    def test_accepts_custom_video_model(self) -> None:
+        payload = request_generate_shot_video_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 10,
+                "rationale": "",
+                "video_model_id": "veo-3.1",
+            }
+        )
+        self.assertEqual(payload["input"]["videoModelId"], "veo-3.1")
+
+    def test_blank_model_falls_back_to_ltx_23(self) -> None:
+        payload = request_generate_shot_video_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 10,
+                "rationale": "",
+                "video_model_id": "   ",
+            }
+        )
+        self.assertEqual(payload["input"]["videoModelId"], "ltx-2.3")
+
+
 class PolicyAndRegistryTests(unittest.TestCase):
     def test_policy_tokens_registered(self) -> None:
         self.assertEqual(
@@ -186,15 +252,21 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertEqual(
             TOOL_POLICY_TOKENS[request_generate_shot_batch.name], "shot_batch.run"
         )
+        self.assertEqual(
+            TOOL_POLICY_TOKENS[request_generate_shot_video_batch.name],
+            "shot_video_batch.run",
+        )
 
     def test_default_allowlist_includes_new_tokens(self) -> None:
         self.assertIn("ingestion.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
+        self.assertIn("shot_video_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
 
     def test_is_tool_allowed_under_default_policy(self) -> None:
         # Passing empty allowlist should trigger default policy.
         self.assertTrue(is_tool_allowed([], "ingestion.run"))
         self.assertTrue(is_tool_allowed([], "shot_batch.run"))
+        self.assertTrue(is_tool_allowed([], "shot_video_batch.run"))
         # But team.manage is still gated behind explicit opt-in.
         self.assertFalse(is_tool_allowed([], "team.manage"))
 
@@ -203,12 +275,27 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertIn(recommend_ingestion_path.name, supervisor_names)
         self.assertIn(request_ingestion_run.name, supervisor_names)
         self.assertIn(request_generate_shot_batch.name, supervisor_names)
+        self.assertIn(request_generate_shot_video_batch.name, supervisor_names)
 
     def test_new_tools_present_in_all_tools(self) -> None:
         all_names = {getattr(t, "name", "") for t in ALL_TOOLS}
         self.assertIn(recommend_ingestion_path.name, all_names)
         self.assertIn(request_ingestion_run.name, all_names)
         self.assertIn(request_generate_shot_batch.name, all_names)
+        self.assertIn(request_generate_shot_video_batch.name, all_names)
+
+    def test_video_batch_policy_gate_independent_of_image_batch(self) -> None:
+        # A strict allowlist that only enables image batch must not leak
+        # video batch authority. Separate policy tokens means the two
+        # privileges are independently configurable per team.
+        allowlist = ["shot_batch.run"]
+        filtered = filter_tools_by_allowlist(
+            [request_generate_shot_batch, request_generate_shot_video_batch],
+            allowlist,
+        )
+        names = {getattr(t, "name", "") for t in filtered}
+        self.assertIn(request_generate_shot_batch.name, names)
+        self.assertNotIn(request_generate_shot_video_batch.name, names)
 
     def test_filter_by_restrictive_allowlist_drops_batch_tool(self) -> None:
         # Explicit allowlist that omits shot_batch.run should remove the batch
