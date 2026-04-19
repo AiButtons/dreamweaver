@@ -117,7 +117,7 @@ export const addCameoReference = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("identityReferenceAssets", {
+    const insertedId = await ctx.db.insert("identityReferenceAssets", {
       storyboardId: args.storyboardId,
       userId,
       ownerPackId: args.ownerPackId,
@@ -134,6 +134,18 @@ export const addCameoReference = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // Tag the owning identity pack as cameo-backed so the character chip UI
+    // can render a "CAMEO" badge. Idempotent — patching a pack that is
+    // already "cameo" is a no-op.
+    if (pack.sourceType !== "cameo") {
+      await ctx.db.patch(args.ownerPackId, {
+        sourceType: "cameo",
+        updatedAt: now,
+      });
+    }
+
+    return insertedId;
   },
 });
 

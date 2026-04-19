@@ -595,6 +595,16 @@ export default defineSchema({
     sourceCharacterId: v.optional(v.string()),
     visibility: v.union(v.literal("project"), v.literal("workspace_opt_in")),
     published: v.boolean(),
+    // Distinguishes packs that represent a generated / fictional character
+    // ("generated", default) from packs backed by an AutoCameo real-person
+    // photo ("cameo"). The cameo flag is set by `identityReferences:
+    // addCameoReference` and surfaces as a badge in the character chip UI so
+    // producers can tell at a glance which characters carry real-world
+    // consent obligations.
+    sourceType: v.optional(v.union(
+      v.literal("generated"),
+      v.literal("cameo"),
+    )),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

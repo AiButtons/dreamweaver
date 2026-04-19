@@ -940,6 +940,11 @@ interface IdentityPackRow {
   sourceCharacterId?: string;
   published?: boolean;
   visibility?: string;
+  // "cameo" when the pack is backed by an AutoCameo real-person photo.
+  // Undefined / "generated" for packs produced by the regular ingestion
+  // pipeline. Surfaces as a small amber badge on the character chip so
+  // producers know the character carries real-world consent obligations.
+  sourceType?: "generated" | "cameo";
 }
 
 interface ConstraintBundleQueryResult {
@@ -1022,6 +1027,7 @@ function CharactersInShotSection({
         <div className="mt-2 flex flex-wrap gap-1.5">
           {characterIds.map((id) => {
             const resolved = resolvedForIdentifier(id);
+            const isCameo = resolved?.sourceType === "cameo";
             return (
               <span
                 key={id}
@@ -1033,11 +1039,21 @@ function CharactersInShotSection({
                 )}
                 title={
                   resolved
-                    ? `Linked to pack "${resolved.name}"`
+                    ? isCameo
+                      ? `Linked to pack "${resolved.name}" — backed by an AutoCameo real-person photo`
+                      : `Linked to pack "${resolved.name}"`
                     : `No identity pack found for "${id}"`
                 }
               >
                 {resolved?.name ?? id}
+                {isCameo ? (
+                  <span
+                    className="rounded-sm bg-amber-500/30 px-1 py-[1px] text-[9px] font-semibold uppercase tracking-wide text-amber-100"
+                    aria-label="AutoCameo reference"
+                  >
+                    cameo
+                  </span>
+                ) : null}
                 {onSetCharacterIds && !disabled ? (
                   <button
                     type="button"
