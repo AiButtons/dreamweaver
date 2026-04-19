@@ -147,7 +147,10 @@ async def _main() -> int:
 
     print(f"\nPortrait prompts: {len(result.portraits)} (sourceUrl filled by Next.js)")
     for p in result.portraits:
-        print(f"  - {p.characterIdentifier} ({p.view}) prompt_chars={len(p.prompt)}")
+        cond = f" ← {p.conditionOnView}" if p.conditionOnView else ""
+        print(
+            f"  - {p.characterIdentifier} ({p.view}){cond} prompt_chars={len(p.prompt)}"
+        )
 
     print(f"\nNodes: {len(result.nodes)}  Edges: {len(result.edges)}")
     for n in result.nodes[:4]:
@@ -166,13 +169,33 @@ async def _main() -> int:
     assert len(result.characters) >= 1, "expected ≥1 character extracted"
     assert len(result.nodes) >= 2, "expected ≥2 shot nodes"
     visible_chars = [c for c in result.characters if c.isVisible]
-    assert len(result.portraits) == len(visible_chars), (
-        f"expected {len(visible_chars)} portraits (1 per visible char), "
+    # M2: three portraits per visible character (front + side + back).
+    assert len(result.portraits) == 3 * len(visible_chars), (
+        f"expected {3 * len(visible_chars)} portraits (front/side/back per visible char), "
         f"got {len(result.portraits)}"
     )
     for p in result.portraits:
         assert p.sourceUrl == "", "Python side must leave sourceUrl blank for Next.js to fill"
         assert p.prompt, "portrait prompt must be populated"
+    # Assert 3-view coverage + correct conditioning metadata.
+    for c in visible_chars:
+        views = [p.view for p in result.portraits if p.characterIdentifier == c.identifier]
+        assert set(views) == {"front", "side", "back"}, (
+            f"{c.identifier} missing views: {set(views)}"
+        )
+        front_row = next(
+            p for p in result.portraits
+            if p.characterIdentifier == c.identifier and p.view == "front"
+        )
+        assert front_row.conditionOnView is None
+        for v in ("side", "back"):
+            row = next(
+                p for p in result.portraits
+                if p.characterIdentifier == c.identifier and p.view == v
+            )
+            assert row.conditionOnView == "front", (
+                f"{c.identifier} {v} portrait must be conditioned on front"
+            )
     if len(result.nodes) >= 2:
         assert len(result.edges) == len(result.nodes) - 1, (
             f"expected {len(result.nodes) - 1} serial edges, got {len(result.edges)}"

@@ -733,6 +733,38 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     [captureHistory, nodes, persistNode, updateNodeData],
   );
 
+  const setNodeCharacterIdsMutation = useMutation(
+    mutationRef("storyboards:setNodeCharacterIds"),
+  );
+  const handleSetNodeCharacterIds = useCallback(
+    async (nodeId: string, characterIds: string[]) => {
+      if (!activeStoryboardId) return;
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      captureHistory();
+      // Optimistically update local graph state so chips snap immediately.
+      updateNodeData(nodeId, {
+        entityRefs: { ...node.data.entityRefs, characterIds },
+      });
+      try {
+        await setNodeCharacterIdsMutation({
+          storyboardId: activeStoryboardId,
+          nodeId,
+          characterIds,
+        });
+      } catch (err) {
+        console.warn("setNodeCharacterIds failed", err);
+      }
+    },
+    [
+      activeStoryboardId,
+      captureHistory,
+      nodes,
+      setNodeCharacterIdsMutation,
+      updateNodeData,
+    ],
+  );
+
   // Bundle the seven delivery-variant mutations into a single callbacks
   // object so PropertiesPanel doesn't balloon its props list. Memoized so
   // the inner <DeliveryMatrixSection> doesn't re-render on unrelated state.
@@ -2086,6 +2118,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
                     onGenerateMedia={handleGenerateMedia}
                     onEditNode={handleEditNode}
                     onUpdateShotMeta={handleUpdateShotMeta}
+                    onSetNodeCharacterIds={handleSetNodeCharacterIds}
                     deliveryVariantCallbacks={deliveryVariantCallbacks}
                     userIdentity={userIdentity}
                     reviewCallbacks={reviewCallbacks}

@@ -12,7 +12,17 @@ export const maxDuration = 1800;
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, type, config } = await req.json();
+    const body = await req.json();
+    const { prompt, type, config } = body;
+    // M2: accept `reference_image_urls` as a top-level field too so callers
+    // (the ingestion route, the shot-generation batch) don't need to nest
+    // it inside `config`. Merge into the provider config below.
+    const referenceImageUrls: string[] | undefined =
+      Array.isArray(body.reference_image_urls)
+        ? body.reference_image_urls.filter(
+            (u: unknown): u is string => typeof u === "string" && u.length > 0,
+          )
+        : undefined;
 
     if (!prompt || !type) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
@@ -24,6 +34,12 @@ export async function POST(req: NextRequest) {
     // StoryboardMediaConfig uses imageModelId / videoModelId; providers consume modelId.
     // Bridge the two here so selectors in PropertiesPanel reach ModalImage/Video providers.
     const cfg = { ...(config ?? {}) } as Record<string, unknown>;
+    if (referenceImageUrls && referenceImageUrls.length > 0) {
+      // Prefer the caller's explicit config.referenceImages if set; otherwise
+      // promote the top-level field. Ditto for the legacy inputImage surface.
+      if (!cfg.referenceImages) cfg.referenceImages = referenceImageUrls;
+      if (!cfg.inputImage) cfg.inputImage = referenceImageUrls[0];
+    }
 
     switch (type) {
         case Modality.IMAGE:

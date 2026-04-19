@@ -17,7 +17,11 @@ import asyncio
 import time
 
 from .character_extractor import CharacterExtractor
-from .character_portraits_generator import build_front_portrait_prompt
+from .character_portraits_generator import (
+    build_back_portrait_prompt,
+    build_front_portrait_prompt,
+    build_side_portrait_prompt,
+)
 from .llm_factory import make_chat_model
 from .mapper import (
     build_portrait,
@@ -57,17 +61,42 @@ async def ingest_screenplay(
     characters = await extractor.extract_characters(script=prose_script)
     llm_calls += 1
 
-    # Stage 3: build front-view portrait prompts (prompt-only — see module
-    # docstring). The Next.js route generates the actual images.
+    # Stage 3: build the 3-view portrait prompt set per visible character
+    # (prompt-only — the Next.js route fulfills them). Order matters: fronts
+    # first so the ingestion route can generate them first and then use the
+    # resulting URLs as `reference_image_urls` when fulfilling the side/back
+    # prompts. The `conditionOnView` hint on each side/back row tells the
+    # route which view to source the reference from.
     visible_characters = [c for c in characters if c.is_visible]
-    portraits = [
-        build_portrait(
-            character_id=c.identifier_in_scene,
-            source_url="",
-            prompt=build_front_portrait_prompt(character=c, style=style),
+    portraits = []
+    for c in visible_characters:
+        portraits.append(
+            build_portrait(
+                character_id=c.identifier_in_scene,
+                source_url="",
+                prompt=build_front_portrait_prompt(character=c, style=style),
+                view="front",
+                condition_on_view=None,
+            )
         )
-        for c in visible_characters
-    ]
+        portraits.append(
+            build_portrait(
+                character_id=c.identifier_in_scene,
+                source_url="",
+                prompt=build_side_portrait_prompt(character=c),
+                view="side",
+                condition_on_view="front",
+            )
+        )
+        portraits.append(
+            build_portrait(
+                character_id=c.identifier_in_scene,
+                source_url="",
+                prompt=build_back_portrait_prompt(character=c),
+                view="back",
+                condition_on_view="front",
+            )
+        )
 
     # Stage 4: design storyboard (brief descriptions)
     artist = StoryboardArtist(chat_model=chat_model)

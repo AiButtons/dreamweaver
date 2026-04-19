@@ -26,8 +26,16 @@ export class ModalImageProvider {
     const aspectRatio = config?.aspectRatio || "16:9";
     const [width, height] = aspectRatios[aspectRatio] || aspectRatios["16:9"];
 
-    // Check for Input Image (Conditional Routing)
-    const inputImage = config?.inputImage;
+    // Check for Input Image (Conditional Routing). Prefer the legacy
+    // `inputImage` field for backward compat; fall back to the first entry
+    // of M2's `referenceImages` array (populated by the ingestion route when
+    // it has a character portrait URL to condition on, and by the bulk
+    // shot-generation batch).
+    const inputImage =
+      config?.inputImage ?? config?.referenceImages?.[0];
+    const extraReferences = (config?.referenceImages ?? []).slice(
+      config?.inputImage ? 0 : 1, // skip the one promoted to inputImage
+    );
     const modelOverride: string | undefined = config?.modelId;
 
     let endpoint = `${this.baseUrl}/api/image/generate`;
@@ -47,6 +55,10 @@ export class ModalImageProvider {
       payload = {
         prompt: finalPrompt,
         image: inputImage,
+        // Forward additional references so the backend can thread them if
+        // the selected model supports multi-reference conditioning. Backends
+        // that ignore the field are unaffected.
+        reference_images: extraReferences.length > 0 ? extraReferences : undefined,
         model_id: modelOverride || "zennah-qwen-edit",
         n: 1,
         extra_params: {

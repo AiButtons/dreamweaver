@@ -99,12 +99,15 @@ def build_portrait(
     character_id: str,
     source_url: str,
     prompt: str,
+    view: str = "front",
+    condition_on_view: Optional[str] = None,
 ) -> IngestedPortrait:
     return IngestedPortrait(
         characterIdentifier=character_id,
-        view="front",
+        view=view,  # type: ignore[arg-type]
         sourceUrl=source_url,
         prompt=prompt,
+        conditionOnView=condition_on_view,  # type: ignore[arg-type]
     )
 
 

@@ -22,7 +22,15 @@ class ScriptIngestRequest(BaseModel):
     mediaBaseUrl: str = Field(default="http://localhost:3000")
 
 
-@router.post("/script-ingest", response_model=IngestionResult)
+@router.post(
+    "/script-ingest",
+    response_model=IngestionResult,
+    # Exclude None values from the response. Dreamweaver's Convex mutations
+    # validate optional fields as `v.optional(v.string())` which means "absent
+    # OR string" — not "nullable". Letting FastAPI serialize Pydantic `None`
+    # as JSON `null` triggers ArgumentValidationError in `bulkCreateNodes`.
+    response_model_exclude_none=True,
+)
 async def script_ingest(
     payload: ScriptIngestRequest,
     authorization: Optional[str] = Header(default=None),

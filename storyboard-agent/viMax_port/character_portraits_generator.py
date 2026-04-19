@@ -3,9 +3,10 @@
 Changes from upstream:
 - Imports `CharacterInScene` from `_vimax_types`; no PIL/ImageOutput dependency.
 - `after_func` is inlined as a no-op.
-- M1 front-only: `generate_side_portrait` / `generate_back_portrait` are
-  removed. They require reference-image support on `/api/image/generate`
-  which is a deferred M2 dependency.
+- M2: full 3-view set. Front is a pure text-to-image generation. Side and
+  back prompts are deliberately short and reference "the provided front-view
+  portrait" — the Next.js ingestion route passes the already-generated front
+  URL as `reference_image_urls` when fulfilling these prompts.
 """
 
 from __future__ import annotations
@@ -28,6 +29,16 @@ Style: {style}
 """
 
 
+prompt_template_side = """
+Generate a full-body, side-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. The character should be centered in the image, occupying most of the frame. Facing left. Standing with arms relaxed at sides.
+"""
+
+
+prompt_template_back = """
+Generate a full-body, back-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. The character should be centered in the image, occupying most of the frame. No facial features should be visible.
+"""
+
+
 def build_front_portrait_prompt(character: CharacterInScene, style: str) -> str:
     """Format the ViMax front-portrait prompt without invoking any image
     generator. M1's coordinator uses this to return prompts to the Next.js
@@ -45,6 +56,24 @@ def build_front_portrait_prompt(character: CharacterInScene, style: str) -> str:
         identifier=character.identifier_in_scene,
         features=features,
         style=style,
+    )
+
+
+def build_side_portrait_prompt(character: CharacterInScene) -> str:
+    """Format the ViMax side-portrait prompt. The Next.js ingestion route
+    passes the already-generated front portrait URL as `reference_image_urls`
+    when fulfilling this prompt — the text deliberately references "the
+    provided front-view portrait" so the image model uses the conditioning."""
+    return prompt_template_side.format(
+        identifier=character.identifier_in_scene,
+    )
+
+
+def build_back_portrait_prompt(character: CharacterInScene) -> str:
+    """Same contract as `build_side_portrait_prompt` — expects the Next.js
+    route to pass the front-view URL as a reference image during fulfillment."""
+    return prompt_template_back.format(
+        identifier=character.identifier_in_scene,
     )
 
 

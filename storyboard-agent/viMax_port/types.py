@@ -67,6 +67,13 @@ class IngestedPortrait(BaseModel):
     view: Literal["front", "side", "back", "three_quarter", "custom"]
     sourceUrl: str
     prompt: str
+    # M2: when set, the Next.js route should fulfill this prompt with the
+    # already-generated portrait of the referenced view (same character) as a
+    # `reference_image_urls` conditioning input. Enables the ViMax 3-view
+    # trick: side + back are conditioned on the front portrait.
+    conditionOnView: Optional[
+        Literal["front", "side", "back", "three_quarter", "custom"]
+    ] = None
 
 
 class IngestedShotNode(BaseModel):

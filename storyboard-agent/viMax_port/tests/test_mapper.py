@@ -252,6 +252,33 @@ def test_shot_meta_text_match_low_angle():
     assert meta.size == "CU"
 
 
+def test_build_portrait_defaults_to_front_with_no_condition():
+    from viMax_port.mapper import build_portrait
+
+    p = build_portrait(
+        character_id="Alice",
+        source_url="https://x.test/a.png",
+        prompt="front portrait of Alice",
+    )
+    assert p.view == "front"
+    assert p.conditionOnView is None
+
+
+def test_build_portrait_side_conditioned_on_front():
+    from viMax_port.mapper import build_portrait
+
+    p = build_portrait(
+        character_id="Alice",
+        source_url="",
+        prompt="side portrait",
+        view="side",
+        condition_on_view="front",
+    )
+    assert p.view == "side"
+    assert p.conditionOnView == "front"
+    assert p.sourceUrl == ""
+
+
 def test_prompt_pack_combines_visual_and_ff():
     briefs = [_make_brief(0, visual="Wide park shot.")]
     decomps = [_make_decomp(0, variation="medium")]

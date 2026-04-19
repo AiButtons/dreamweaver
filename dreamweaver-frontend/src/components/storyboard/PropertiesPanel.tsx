@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2 } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2, Users, X, Plus } from "lucide-react";
+import { useQuery } from "convex/react";
+import { queryRef } from "@/lib/convexRefs";
 import { MediaType } from "@/app/storyboard/types";
 import type {
   AspectRatio,
@@ -72,6 +74,7 @@ interface PropertiesPanelProps {
   onGenerateMedia: (nodeId: string, type: MediaType, prompt: string, config: StoryboardMediaConfig) => void;
   onEditNode: (nodeId: string, instruction: string) => void;
   onUpdateShotMeta?: (nodeId: string, next: ShotMeta) => void;
+  onSetNodeCharacterIds?: (nodeId: string, characterIds: string[]) => Promise<void> | void;
   deliveryVariantCallbacks?: DeliveryVariantCallbacks;
   userIdentity?: UserIdentity | null;
   reviewCallbacks?: ReviewCallbacks;
@@ -110,6 +113,7 @@ export default function PropertiesPanel({
   onGenerateMedia,
   onEditNode,
   onUpdateShotMeta,
+  onSetNodeCharacterIds,
   deliveryVariantCallbacks,
   userIdentity,
   reviewCallbacks,
@@ -141,10 +145,44 @@ export default function PropertiesPanel({
 
   const [rewriteInstruction, setRewriteInstruction] = useState("");
 
+  // The "effective" prompt is what we'd hand to the model if the user clicked
+  // Generate right now without editing. Prefer the structured promptPack
+  // (populated by ViMax M1 ingestion and by earlier rewrites) over the raw
+  // shot segment. Fall back to segment when the pack is empty.
+  const effectivePrompt = useMemo(() => {
+    if (!selectedNode) return "";
+    const pack = selectedNode.data.promptPack;
+    if (mediaType === MediaType.IMAGE) {
+      const pick = pack?.imagePrompt?.trim() ?? "";
+      if (pick) return pick;
+    } else if (mediaType === MediaType.VIDEO) {
+      const pick = pack?.videoPrompt?.trim() ?? "";
+      if (pick) return pick;
+    }
+    return (selectedNode.data.segment ?? "").trim();
+  }, [mediaType, selectedNode]);
+
+  // Sync the editable textarea value to the effective prompt when the user
+  // switches nodes or toggles image/video mode. Tracked via refs so typing
+  // into the textarea doesn't trigger the sync.
+  const lastNodeIdRef = useRef<string | null>(null);
+  const lastMediaTypeRef = useRef<MediaType>(mediaType);
+  useEffect(() => {
+    const currentId = selectedNode?.id ?? null;
+    if (
+      lastNodeIdRef.current !== currentId ||
+      lastMediaTypeRef.current !== mediaType
+    ) {
+      setPromptOverride(effectivePrompt);
+      lastNodeIdRef.current = currentId;
+      lastMediaTypeRef.current = mediaType;
+    }
+  }, [selectedNode, mediaType, effectivePrompt]);
+
   const promptPreview = useMemo(() => {
     if (!selectedNode) return "";
-    return (promptOverride.trim() ? promptOverride.trim() : selectedNode.data.segment).trim();
-  }, [promptOverride, selectedNode]);
+    return promptOverride.trim() || effectivePrompt;
+  }, [promptOverride, selectedNode, effectivePrompt]);
 
   if (!selectedNode) return null;
   const { id, data } = selectedNode;
@@ -223,6 +261,14 @@ export default function PropertiesPanel({
               nodeId={id}
               shotMeta={data.shotMeta}
               onUpdateShotMeta={onUpdateShotMeta}
+              disabled={isProcessing}
+            />
+
+            <CharactersInShotSection
+              nodeId={id}
+              storyboardId={storyboardId}
+              characterIds={data.entityRefs?.characterIds ?? []}
+              onSetCharacterIds={onSetNodeCharacterIds}
               disabled={isProcessing}
             />
 
@@ -339,7 +385,7 @@ export default function PropertiesPanel({
                   <Textarea
                     value={promptOverride}
                     onChange={(e) => setPromptOverride(e.target.value)}
-                    placeholder={data.segment}
+                    placeholder={effectivePrompt || data.segment}
                     className="min-h-[92px] bg-background/60"
                     disabled={isProcessing}
                   />
@@ -348,10 +394,13 @@ export default function PropertiesPanel({
                     variant="outline"
                     size="sm"
                     className="h-8"
-                    onClick={() => setPromptOverride("")}
-                    disabled={isProcessing || !promptOverride}
+                    onClick={() => setPromptOverride(effectivePrompt)}
+                    disabled={
+                      isProcessing ||
+                      promptOverride.trim() === effectivePrompt.trim()
+                    }
                   >
-                    Use node text
+                    Reset to node prompt
                   </Button>
                 </CollapsibleContent>
               </div>
@@ -862,3 +911,215 @@ function Toggle({
     </button>
   );
 }
+
+// ---------------------------------------------------------------------------
+// CharactersInShotSection
+//
+// Renders chips for every character id on the node's `entityRefs.characterIds`
+// and a dropdown of the storyboard's identity packs to add more. Characters
+// can be added, removed, or swapped here — the source of truth is the node's
+// entityRefs, which gets persisted through `onSetCharacterIds`.
+//
+// Character identifiers are matched to identityPacks by the pack's
+// `sourceCharacterId` string (set by the ViMax ingester; can match the pack's
+// `name` as a fallback for packs created by hand).
+// ---------------------------------------------------------------------------
+
+interface CharactersInShotSectionProps {
+  nodeId: string;
+  storyboardId?: string;
+  characterIds: string[];
+  onSetCharacterIds?: (nodeId: string, characterIds: string[]) => Promise<void> | void;
+  disabled?: boolean;
+}
+
+interface IdentityPackRow {
+  _id: string;
+  packId: string;
+  name: string;
+  sourceCharacterId?: string;
+  published?: boolean;
+  visibility?: string;
+}
+
+interface ConstraintBundleQueryResult {
+  identityPacks?: IdentityPackRow[];
+}
+
+function CharactersInShotSection({
+  nodeId,
+  storyboardId,
+  characterIds,
+  onSetCharacterIds,
+  disabled,
+}: CharactersInShotSectionProps) {
+  const [picking, setPicking] = useState(false);
+  const [pickerValue, setPickerValue] = useState("");
+
+  const bundle = useQuery(
+    queryRef("continuityOS:listConstraintBundle"),
+    storyboardId ? { storyboardId } : "skip",
+  ) as ConstraintBundleQueryResult | undefined;
+  const packs = bundle?.identityPacks ?? [];
+
+  // Map from character identifier → pack (for display). Match against
+  // sourceCharacterId first, then pack name.
+  const packByIdentifier = useMemo(() => {
+    const map = new Map<string, IdentityPackRow>();
+    for (const p of packs) {
+      if (p.sourceCharacterId) map.set(p.sourceCharacterId, p);
+      map.set(p.name, p);
+    }
+    return map;
+  }, [packs]);
+
+  const availableToAdd = useMemo(() => {
+    const current = new Set(characterIds);
+    return packs.filter((p) => {
+      const key = p.sourceCharacterId ?? p.name;
+      return !current.has(key);
+    });
+  }, [packs, characterIds]);
+
+  const commit = (next: string[]) => {
+    if (!onSetCharacterIds) return;
+    void onSetCharacterIds(nodeId, next);
+  };
+
+  const handleAdd = (value: string) => {
+    if (!value) return;
+    if (characterIds.includes(value)) return;
+    commit([...characterIds, value]);
+    setPicking(false);
+    setPickerValue("");
+  };
+
+  const handleRemove = (value: string) => {
+    commit(characterIds.filter((id) => id !== value));
+  };
+
+  const resolvedForIdentifier = (id: string): IdentityPackRow | null =>
+    packByIdentifier.get(id) ?? null;
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <Users className="size-3.5" />
+          Characters in shot
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {characterIds.length} / {packs.length} packs
+        </span>
+      </div>
+
+      {characterIds.length === 0 ? (
+        <div className="mt-2 text-xs text-muted-foreground">
+          No characters linked to this shot yet. Link a character to surface
+          their identity pack + reference portraits during media generation.
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {characterIds.map((id) => {
+            const resolved = resolvedForIdentifier(id);
+            return (
+              <span
+                key={id}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                  resolved
+                    ? "border-sky-400/35 bg-sky-500/15 text-sky-200"
+                    : "border-amber-400/35 bg-amber-500/15 text-amber-200",
+                )}
+                title={
+                  resolved
+                    ? `Linked to pack "${resolved.name}"`
+                    : `No identity pack found for "${id}"`
+                }
+              >
+                {resolved?.name ?? id}
+                {onSetCharacterIds && !disabled ? (
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(id)}
+                    className="ml-0.5 rounded-full p-0.5 hover:bg-white/10"
+                    aria-label={`Remove ${resolved?.name ?? id}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                ) : null}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {onSetCharacterIds ? (
+        picking ? (
+          <div className="mt-2 flex items-center gap-2">
+            <select
+              value={pickerValue}
+              onChange={(e) => setPickerValue(e.target.value)}
+              className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              disabled={disabled}
+            >
+              <option value="">Select a character…</option>
+              {availableToAdd.map((p) => (
+                <option
+                  key={p._id}
+                  value={p.sourceCharacterId ?? p.name}
+                >
+                  {p.name}
+                  {p.sourceCharacterId && p.sourceCharacterId !== p.name
+                    ? ` (${p.sourceCharacterId})`
+                    : ""}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => handleAdd(pickerValue)}
+              disabled={!pickerValue || disabled}
+            >
+              Add
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setPicking(false);
+                setPickerValue("");
+              }}
+              disabled={disabled}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 text-[11px]"
+              onClick={() => setPicking(true)}
+              disabled={disabled || availableToAdd.length === 0}
+              title={
+                availableToAdd.length === 0
+                  ? "All identity packs are already linked"
+                  : "Add a character to this shot"
+              }
+            >
+              <Plus className="size-3.5" />
+              Add character
+            </Button>
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+

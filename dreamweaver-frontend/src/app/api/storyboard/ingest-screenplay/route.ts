@@ -47,11 +47,16 @@ interface PythonIngestedCharacter {
   identityPackName: string;
 }
 
+type PortraitView = "front" | "side" | "back" | "three_quarter" | "custom";
+
 interface PythonIngestedPortrait {
   characterIdentifier: string;
-  view: "front" | "side" | "back" | "three_quarter" | "custom";
+  view: PortraitView;
   sourceUrl: string; // empty from Python — we fill it
   prompt: string;
+  /** M2: when set, fulfill this prompt with the same character's
+   *  already-generated portrait of `conditionOnView` as an I2I reference. */
+  conditionOnView?: PortraitView | null;
 }
 
 interface PythonIngestedShotNode {
@@ -86,6 +91,30 @@ interface PythonIngestionResult {
   preprocessed: boolean;
 }
 
+/**
+ * Recursively replace `null` with `undefined` so Convex `v.optional(...)`
+ * validators accept the payload. Python serializes unset `Optional[str]`
+ * fields as JSON `null`, but Convex treats `null` as a distinct value from
+ * "absent" and rejects it.
+ */
+const stripNulls = <T>(value: T): T => {
+  if (value === null) return undefined as unknown as T;
+  if (Array.isArray(value)) {
+    return value.map((v) => stripNulls(v)) as unknown as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      const scrubbed = stripNulls(raw);
+      if (scrubbed !== undefined) {
+        out[key] = scrubbed;
+      }
+    }
+    return out as T;
+  }
+  return value;
+};
+
 const cheapDnaFromCharacter = (c: PythonIngestedCharacter) => {
   const tokens = [c.staticFeatures, c.dynamicFeatures]
     .filter((s) => s && s.length > 0)
@@ -116,6 +145,7 @@ const generatePortraitImage = async (
   origin: string,
   prompt: string,
   cookieHeader: string | null,
+  referenceImageUrls?: string[],
 ): Promise<string | null> => {
   try {
     const res = await fetchWithTimeout(
@@ -130,6 +160,14 @@ const generatePortraitImage = async (
           prompt,
           type: "image",
           config: { aspect_ratio: "9:16" },
+          // M2: when present, routes the provider to the edit/compose path
+          // so the generated portrait is conditioned on the reference URL.
+          // Used for side/back portraits (conditioned on the character's
+          // already-generated front view).
+          reference_image_urls:
+            referenceImageUrls && referenceImageUrls.length > 0
+              ? referenceImageUrls
+              : undefined,
         }),
       },
       PORTRAIT_TIMEOUT_MS,
@@ -242,20 +280,82 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // 6. Generate portraits in parallel via in-process /api/media/generate.
-  // Uses the user's session cookie since that route has no explicit auth
-  // gate but lives in the same Next.js process behind the same middleware.
+  // 6. Generate portraits via in-process /api/media/generate. M2 ships the
+  // ViMax 3-view trick: the coordinator emits `front`, `side`, and `back`
+  // prompts per visible character. Side + back carry `conditionOnView:
+  // "front"`, so we generate fronts first and then fulfill the rest with
+  // each character's front URL as an image-to-image reference.
   const cookieHeader = request.headers.get("cookie");
   const origin = request.nextUrl.origin;
-  const portraitUrlResults = await Promise.all(
-    pythonResult.portraits.map((p) =>
-      generatePortraitImage(origin, p.prompt, cookieHeader),
-    ),
+  const portraitUrlResults: (string | null)[] = new Array(
+    pythonResult.portraits.length,
+  ).fill(null);
+  // Map (characterIdentifier, view) → resolved URL so side/back can look up
+  // their conditioning reference deterministically.
+  const resolvedPortraitUrls = new Map<string, string>();
+  const portraitKey = (characterId: string, view: PortraitView): string =>
+    `${characterId}::${view}`;
+
+  // Pass 1 — unconditional portraits (fronts + any view with no dependency).
+  const pass1Indices: number[] = [];
+  const pass2Indices: number[] = [];
+  pythonResult.portraits.forEach((p, i) => {
+    if (p.conditionOnView) pass2Indices.push(i);
+    else pass1Indices.push(i);
+  });
+
+  await Promise.all(
+    pass1Indices.map(async (i) => {
+      const p = pythonResult.portraits[i];
+      const url = await generatePortraitImage(origin, p.prompt, cookieHeader);
+      portraitUrlResults[i] = url;
+      if (url) {
+        resolvedPortraitUrls.set(portraitKey(p.characterIdentifier, p.view), url);
+      }
+    }),
+  );
+
+  // Pass 2 — conditioned portraits. Resolve the reference URL per character;
+  // skip gracefully if the required view failed in pass 1.
+  await Promise.all(
+    pass2Indices.map(async (i) => {
+      const p = pythonResult.portraits[i];
+      const refView = (p.conditionOnView ?? null) as PortraitView | null;
+      if (!refView) {
+        portraitUrlResults[i] = await generatePortraitImage(
+          origin,
+          p.prompt,
+          cookieHeader,
+        );
+        return;
+      }
+      const refUrl = resolvedPortraitUrls.get(
+        portraitKey(p.characterIdentifier, refView),
+      );
+      if (!refUrl) {
+        console.warn(
+          `[ingest] portrait "${p.characterIdentifier}/${p.view}" needed ${refView} reference but it was not available`,
+        );
+        portraitUrlResults[i] = null;
+        return;
+      }
+      const url = await generatePortraitImage(
+        origin,
+        p.prompt,
+        cookieHeader,
+        [refUrl],
+      );
+      portraitUrlResults[i] = url;
+      if (url) {
+        resolvedPortraitUrls.set(portraitKey(p.characterIdentifier, p.view), url);
+      }
+    }),
   );
 
   // 7. Write identity packs. Track identifier → pack _id for the portrait
   // FK writes below.
   const packIdByCharacter = new Map<string, string>();
+  const identityPackFailures: string[] = [];
   for (const c of pythonResult.characters) {
     try {
       const packAppId = `pack_${c.identifier.replace(/[^a-zA-Z0-9]+/g, "_").toLowerCase()}_${Date.now().toString(36)}`;
@@ -277,11 +377,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         identityPacks?: Array<{ _id: string; packId: string }>;
       } | null;
       const hit = bundle?.identityPacks?.find((row) => row.packId === packAppId);
-      if (hit) packIdByCharacter.set(c.identifier, hit._id);
+      if (hit) {
+        packIdByCharacter.set(c.identifier, hit._id);
+        console.log(
+          `[ingest] identityPack "${c.identifier}" → ${hit._id} (packId=${packAppId})`,
+        );
+      } else {
+        identityPackFailures.push(`${c.identifier}: pack row not found after upsert`);
+        console.warn(
+          `[ingest] identityPack "${c.identifier}" upsert succeeded but row not found in bundle`,
+        );
+      }
     } catch (err) {
-      console.warn(`identity pack upsert failed for ${c.identifier}`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      identityPackFailures.push(`${c.identifier}: ${msg}`);
+      console.warn(`[ingest] identity pack upsert failed for ${c.identifier}`, err);
     }
   }
+  console.log(
+    `[ingest] identityPacks: ${packIdByCharacter.size}/${pythonResult.characters.length} written` +
+      (identityPackFailures.length ? ` — failures: ${identityPackFailures.join("; ")}` : ""),
+  );
 
   // 8. Write portrait references for resolved URLs.
   let portraitsWritten = 0;
@@ -309,25 +425,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // 9. Bulk-insert nodes + edges.
+  // 9. Bulk-insert nodes + edges. Scrub any `null` that snuck through from
+  // Python's JSON serialization — Convex's `v.optional(...)` rejects null
+  // (it's not the same as "absent").
   let nodesWritten = 0;
   let edgesWritten = 0;
   if (pythonResult.nodes.length > 0) {
     try {
+      const scrubbedNodes = pythonResult.nodes.map((n) =>
+        stripNulls({
+          nodeId: n.nodeId,
+          nodeType: n.nodeType,
+          label: n.label,
+          segment: n.segment,
+          position: n.position,
+          shotMeta: n.shotMeta ?? undefined,
+          promptPack: n.promptPack ?? undefined,
+          // Surface character identifiers from the Python storyboard-artist
+          // so the PropertiesPanel's "Characters in shot" chip strip has
+          // something to render on first open.
+          characterIds:
+            n.characterIdentifiers && n.characterIdentifiers.length > 0
+              ? n.characterIdentifiers
+              : undefined,
+        }),
+      );
       const res = (await client.mutation(
         mutationRef("storyboards:bulkCreateNodes"),
-        {
-          storyboardId,
-          nodes: pythonResult.nodes.map((n) => ({
-            nodeId: n.nodeId,
-            nodeType: n.nodeType,
-            label: n.label,
-            segment: n.segment,
-            position: n.position,
-            shotMeta: n.shotMeta ?? undefined,
-            promptPack: n.promptPack ?? undefined,
-          })),
-        },
+        { storyboardId, nodes: scrubbedNodes },
       )) as { total?: number } | undefined;
       nodesWritten = res?.total ?? pythonResult.nodes.length;
     } catch (err) {
@@ -340,19 +465,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   if (pythonResult.edges.length > 0) {
     try {
+      const scrubbedEdges = pythonResult.edges.map((e) =>
+        stripNulls({
+          edgeId: e.edgeId,
+          sourceNodeId: e.sourceNodeId,
+          targetNodeId: e.targetNodeId,
+          edgeType: e.edgeType,
+          isPrimary: e.isPrimary,
+          order: e.order ?? undefined,
+        }),
+      );
       const res = (await client.mutation(
         mutationRef("storyboards:bulkCreateEdges"),
-        {
-          storyboardId,
-          edges: pythonResult.edges.map((e) => ({
-            edgeId: e.edgeId,
-            sourceNodeId: e.sourceNodeId,
-            targetNodeId: e.targetNodeId,
-            edgeType: e.edgeType,
-            isPrimary: e.isPrimary,
-            order: e.order ?? undefined,
-          })),
-        },
+        { storyboardId, edges: scrubbedEdges },
       )) as { total?: number } | undefined;
       edgesWritten = res?.total ?? pythonResult.edges.length;
     } catch (err) {
@@ -364,9 +489,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
+  console.log(
+    `[ingest] storyboard=${storyboardId} characters=${pythonResult.characters.length} portraits=${portraitsWritten}/${pythonResult.portraits.length} nodes=${nodesWritten} edges=${edgesWritten} llmCalls=${pythonResult.llmCallCount} ${pythonResult.pipelineDurationMs}ms`,
+  );
+
   return NextResponse.json({
     storyboardId,
     characterCount: pythonResult.characters.length,
+    identityPacksWritten: packIdByCharacter.size,
+    identityPackFailures,
     portraitCount: portraitsWritten,
     nodeCount: nodesWritten,
     edgeCount: edgesWritten,

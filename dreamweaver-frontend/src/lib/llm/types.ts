@@ -18,7 +18,16 @@ export interface ImageGenerationConfig {
   aspectRatio?: string;
   style?: string;
   modelId?: string;
+  /** Legacy single reference — routes the provider to `/api/image/edit`. */
   inputImage?: string;
+  /**
+   * M2: zero or more URL references used as image-to-image conditioning
+   * (e.g. character portraits for shot consistency, or a front-view portrait
+   * when generating side/back in the 3-view trick). When populated, the
+   * provider forwards them to the edit / compose endpoints. The first entry
+   * is used as `inputImage` when that legacy field is unset.
+   */
+  referenceImages?: string[];
 }
 
 export interface AudioGenerationConfig {

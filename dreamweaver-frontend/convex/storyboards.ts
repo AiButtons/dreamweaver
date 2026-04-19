@@ -1251,6 +1251,10 @@ export const bulkCreateNodes = mutation({
             continuityDirectives: v.optional(v.array(v.string())),
           }),
         ),
+        // Characters that appear in this shot — populated by the ViMax M1
+        // ingester from the storyboard-artist's `ff_vis_char_idxs`. Matched
+        // against `identityPacks.sourceCharacterId` for pack resolution.
+        characterIds: v.optional(v.array(v.string())),
       }),
     ),
   },
@@ -1302,6 +1306,12 @@ export const bulkCreateNodes = mutation({
               n.promptPack.continuityDirectives ?? base.promptPack.continuityDirectives,
           };
         }
+        if (n.characterIds && n.characterIds.length > 0) {
+          payload.entityRefs = {
+            ...base.entityRefs,
+            characterIds: n.characterIds,
+          };
+        }
         const id = await ctx.db.insert(
           "storyboardNodes",
           payload as Parameters<typeof ctx.db.insert>[1],
@@ -1319,6 +1329,10 @@ export const bulkCreateNodes = mutation({
                 n.promptPack.continuityDirectives ?? existing.promptPack.continuityDirectives,
             }
           : existing.promptPack;
+        const mergedEntityRefs =
+          n.characterIds && n.characterIds.length > 0
+            ? { ...existing.entityRefs, characterIds: n.characterIds }
+            : existing.entityRefs;
         await ctx.db.patch(existing._id, {
           nodeType: n.nodeType,
           label: n.label,
@@ -1331,6 +1345,7 @@ export const bulkCreateNodes = mutation({
           },
           shotMeta: n.shotMeta ?? existing.shotMeta,
           promptPack: mergedPromptPack,
+          entityRefs: mergedEntityRefs,
           updatedAt: now,
         });
         patchedIds.push(existing._id);
@@ -1426,6 +1441,46 @@ export const bulkCreateEdges = mutation({
       patchedIds,
       total: insertedIds.length + patchedIds.length,
     };
+  },
+});
+
+/**
+ * Patch only the `characterIds` inside a node's `entityRefs`. Used by the
+ * "Characters in shot" chip-picker in the PropertiesPanel so users can
+ * attach / detach character identity packs without blowing away other
+ * entityRefs fields (backgroundId, sceneId, shotId).
+ */
+export const setNodeCharacterIds = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    nodeId: v.string(),
+    characterIds: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const node = await ctx.db
+      .query("storyboardNodes")
+      .withIndex("by_storyboard_node", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("nodeId", args.nodeId),
+      )
+      .unique();
+    if (!node) {
+      throw new ConvexError("Node not found");
+    }
+    // Dedupe, preserve order, drop empties.
+    const cleaned = Array.from(
+      new Set(args.characterIds.map((id) => id.trim()).filter((id) => id.length > 0)),
+    );
+    await ctx.db.patch(node._id, {
+      entityRefs: {
+        ...node.entityRefs,
+        characterIds: cleaned,
+      },
+      updatedAt: Date.now(),
+    });
+    await ctx.db.patch(args.storyboardId, { updatedAt: Date.now() });
+    return { nodeId: args.nodeId, characterIds: cleaned };
   },
 });
 
