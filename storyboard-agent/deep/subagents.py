@@ -18,7 +18,10 @@ from .tools import (
     preview_simulation_critic_plan,
     publish_agent_team_revision,
     producer_guard,
+    recommend_ingestion_path,
     repair_plan,
+    request_generate_shot_batch,
+    request_ingestion_run,
     select_agent_team,
     simulate_story_playthrough,
     simulate_execution_plan,
@@ -115,6 +118,23 @@ def get_subagents(
                 update_agent_team_member,
                 publish_agent_team_revision,
                 generate_team_from_prompt,
+            ],
+        },
+        {
+            "name": "ingestion_coordinator",
+            "description": "Routes producer intent to the right ingestion surface (screenplay/idea/novel) and proposes shot-batch runs.",
+            "system_prompt": (
+                "You are the Ingestion Coordinator. Classify producer intent using "
+                "recommend_ingestion_path, then request_ingestion_run to open the "
+                "right library-page dialog pre-populated with hints. Once a storyboard "
+                "exists, you may also propose request_generate_shot_batch to render all "
+                "shot images in one bounded-concurrency batch. Never trigger ingestion "
+                "or batch generation silently — always gate through the HITL tools."
+            ),
+            "tools": [
+                recommend_ingestion_path,
+                request_ingestion_run,
+                request_generate_shot_batch,
             ],
         },
         {

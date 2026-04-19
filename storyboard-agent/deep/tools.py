@@ -29,6 +29,11 @@ ALLOWED_GRAPH_OPS = {
     "delete_edge",
 }
 
+# Ingestion modes recognized by the supervisor when routing a producer's
+# intent to the right ingestion surface. These mirror the three library-page
+# dialogs (From Screenplay / From Idea / From Novel) wired up by ViMax M1–M3.
+ALLOWED_INGESTION_MODES = {"screenplay", "idea", "novel"}
+
 
 def _json_hash(payload: Dict[str, Any]) -> str:
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
@@ -260,6 +265,178 @@ def producer_guard(
         "approvalMode": mode,
         "requiresHitl": True,
         "maxBatchSize": 1 if mode == "per_operation" else 5,
+    }
+
+
+@tool
+def recommend_ingestion_path(
+    user_request: str,
+    has_screenplay_text: bool = False,
+    has_novel_text: bool = False,
+    has_idea_text: bool = False,
+) -> Dict[str, Any]:
+    """Classifies a producer request to one of the three ingestion surfaces.
+
+    Returns a deterministic recommendation (``mode``) with a short rationale and
+    the input fields the UI will need to collect. This tool is non-mutating: it
+    emits a recommendation only. The supervisor should hand off to
+    ``request_ingestion_run`` (HITL) to actually kick off the pipeline.
+
+    ``mode`` is one of ``screenplay`` | ``idea`` | ``novel``.
+
+    Heuristics:
+      * If the caller already pasted raw screenplay text (slug lines, INT./EXT.,
+        dialogue blocks) → screenplay.
+      * If the caller already pasted a long prose passage (>800 chars or
+        multiple paragraphs of narration) → novel.
+      * Otherwise, treat short briefs / premises / loglines as idea.
+    """
+    request_norm = " ".join(user_request.split()).lower()
+    request_compact = request_norm[:4000]
+    request_len = len(request_compact)
+
+    screenplay_signals = 0
+    for marker in ("int.", "ext.", "fade in", "fade out", "cut to", "scene "):
+        if marker in request_compact:
+            screenplay_signals += 1
+
+    novel_signals = 0
+    if request_len > 800:
+        novel_signals += 1
+    if request_compact.count("\n\n") >= 2:
+        novel_signals += 1
+    for marker in ("chapter ", "he said", "she said", "—", "“", "”"):
+        if marker in request_compact:
+            novel_signals += 1
+            break
+
+    idea_signals = 0
+    for marker in ("idea:", "premise", "logline", "pitch", "concept"):
+        if marker in request_compact:
+            idea_signals += 1
+
+    # Caller-provided input flags override heuristics when present.
+    mode: str
+    rationale: str
+    if has_screenplay_text or screenplay_signals >= 2:
+        mode = "screenplay"
+        rationale = (
+            "Request contains explicit screenplay formatting (slug lines / action "
+            "blocks). Route to From-Screenplay ingestion."
+        )
+    elif has_novel_text or novel_signals >= 2 or (request_len > 1200 and idea_signals == 0):
+        mode = "novel"
+        rationale = (
+            "Request reads like long-form prose. Route to From-Novel ingestion so "
+            "the pipeline can chunk + compress + split into episodes."
+        )
+    elif has_idea_text or idea_signals >= 1 or request_len <= 800:
+        mode = "idea"
+        rationale = (
+            "Request is a premise / logline / short brief. Route to From-Idea "
+            "ingestion so the pipeline can expand it into a screenplay first."
+        )
+    else:
+        mode = "idea"
+        rationale = (
+            "Ambiguous request. Defaulting to From-Idea because it is the cheapest "
+            "ingestion path and can be re-ingested after more detail is gathered."
+        )
+
+    required_fields: List[str]
+    if mode == "screenplay":
+        required_fields = ["title", "screenplay", "style"]
+    elif mode == "novel":
+        required_fields = ["title", "novel", "style", "targetEpisodeCount"]
+    else:
+        required_fields = ["title", "idea", "style", "targetShotCount"]
+
+    return {
+        "mode": mode,
+        "rationale": rationale,
+        "requiredFields": required_fields,
+        "requestLength": request_len,
+        "recommendationId": f"ingestreco_{_json_hash({'r': request_compact[:2000], 'm': mode})}",
+    }
+
+
+@tool
+def request_ingestion_run(
+    mode: Literal["screenplay", "idea", "novel"],
+    title: str,
+    rationale: str,
+    hints: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Requests human approval to kick off an ingestion pipeline. Interrupt target.
+
+    The producer confirms the mode + title + rationale in chat, and the UI opens
+    the corresponding library-page dialog pre-populated with hints. The agent
+    never ingests silently — this tool is the HITL gate between intent and
+    pipeline execution.
+
+    ``hints`` may include any of: ``style``, ``targetEpisodeCount``,
+    ``targetShotCount``, ``userRequirement``, ``novelExcerpt``, ``ideaSynopsis``.
+    """
+    mode_norm = mode if mode in ALLOWED_INGESTION_MODES else "idea"
+    clean_hints: Dict[str, Any] = {}
+    for key in (
+        "style",
+        "userRequirement",
+        "ideaSynopsis",
+        "novelExcerpt",
+        "screenplayExcerpt",
+    ):
+        value = hints.get(key)
+        if isinstance(value, str) and value:
+            clean_hints[key] = " ".join(value.split())[:2400]
+    for key in ("targetEpisodeCount", "targetShotCount"):
+        value = hints.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            clean_hints[key] = int(value)
+    return {
+        "schemaVersion": "v2",
+        "action": "request_ingestion_run",
+        "status": "waiting_for_human",
+        "input": {
+            "mode": mode_norm,
+            "title": " ".join(title.split())[:200] or f"Untitled {mode_norm}",
+            "rationale": " ".join(rationale.split())[:1200],
+            "hints": clean_hints,
+        },
+    }
+
+
+@tool
+def request_generate_shot_batch(
+    storyboard_id: str,
+    branch_id: str,
+    node_count: int,
+    rationale: str,
+    skip_existing: bool = True,
+    concurrency: int = 3,
+) -> Dict[str, Any]:
+    """Requests human approval to run the Generate-All-Shots batch. Interrupt target.
+
+    Triggers the per-shot image batch pipeline (portraits-as-references,
+    bounded-concurrency) on the active storyboard once the producer approves in
+    chat. Use ``skip_existing=True`` to preserve any shots the producer already
+    rendered manually. Cap ``concurrency`` in [1, 6] — higher values saturate
+    media-gen quotas.
+    """
+    safe_concurrency = max(1, min(6, int(concurrency) if isinstance(concurrency, (int, float)) else 3))
+    safe_node_count = max(0, int(node_count) if isinstance(node_count, (int, float)) else 0)
+    return {
+        "schemaVersion": "v2",
+        "action": "request_generate_shot_batch",
+        "status": "waiting_for_human",
+        "input": {
+            "storyboardId": storyboard_id,
+            "branchId": branch_id,
+            "nodeCount": safe_node_count,
+            "rationale": " ".join(rationale.split())[:1200],
+            "skipExisting": bool(skip_existing),
+            "concurrency": safe_concurrency,
+        },
     }
 
 
@@ -799,6 +976,7 @@ ALL_TOOLS = [
     simulate_story_playthrough,
     continuity_critic,
     producer_guard,
+    recommend_ingestion_path,
     repair_plan,
     approve_graph_patch,
     approve_media_prompt,
@@ -808,6 +986,8 @@ ALL_TOOLS = [
     approve_dailies_batch,
     approve_merge_policy,
     approve_repair_plan,
+    request_ingestion_run,
+    request_generate_shot_batch,
     select_agent_team,
     create_agent_team,
     update_agent_team_member,
@@ -830,6 +1010,7 @@ ALL_TOOLS = [
 SUPERVISOR_CORE_TOOLS = [
     producer_guard,
     continuity_critic,
+    recommend_ingestion_path,
     approve_graph_patch,
     approve_media_prompt,
     approve_execution_plan,
@@ -838,6 +1019,8 @@ SUPERVISOR_CORE_TOOLS = [
     approve_dailies_batch,
     approve_merge_policy,
     approve_repair_plan,
+    request_ingestion_run,
+    request_generate_shot_batch,
     select_agent_team,
 ]
 
@@ -857,6 +1040,8 @@ DEFAULT_RUNTIME_ALLOWLIST: List[str] = [
     "execution.guard",
     "repair.plan",
     "branch.merge",
+    "ingestion.run",
+    "shot_batch.run",
 ]
 
 TOOL_POLICY_TOKENS: Dict[str, str] = {
@@ -876,6 +1061,9 @@ TOOL_POLICY_TOKENS: Dict[str, str] = {
     approve_dailies_batch.name: "dailies.batch",
     approve_merge_policy.name: "branch.merge",
     approve_repair_plan.name: "repair.plan",
+    recommend_ingestion_path.name: "ingestion.run",
+    request_ingestion_run.name: "ingestion.run",
+    request_generate_shot_batch.name: "shot_batch.run",
     select_agent_team.name: "team.manage",
     create_agent_team.name: "team.manage",
     update_agent_team_member.name: "team.manage",

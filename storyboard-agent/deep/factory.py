@@ -33,11 +33,13 @@ from .tools import (
     approve_merge_policy,
     approve_repair_plan,
     create_agent_team,
+    filter_tools_by_allowlist,
     generate_team_from_prompt,
     preview_simulation_critic_plan,
     publish_agent_team_revision,
+    request_generate_shot_batch,
+    request_ingestion_run,
     select_agent_team,
-    filter_tools_by_allowlist,
     update_agent_team_member,
 )
 
@@ -154,6 +156,8 @@ def _interrupt_config() -> Dict[str, Dict[str, Any]]:
         approve_dailies_batch.name: {"allowed_decisions": ["approve", "edit", "reject"]},
         approve_merge_policy.name: {"allowed_decisions": ["approve", "reject"]},
         approve_repair_plan.name: {"allowed_decisions": ["approve", "edit", "reject"]},
+        request_ingestion_run.name: {"allowed_decisions": ["approve", "edit", "reject"]},
+        request_generate_shot_batch.name: {"allowed_decisions": ["approve", "edit", "reject"]},
         select_agent_team.name: {"allowed_decisions": ["approve", "reject"]},
         create_agent_team.name: {"allowed_decisions": ["approve", "edit", "reject"]},
         update_agent_team_member.name: {"allowed_decisions": ["approve", "edit", "reject"]},

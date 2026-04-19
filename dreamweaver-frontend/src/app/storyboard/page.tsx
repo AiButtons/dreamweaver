@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText, Lightbulb, BookOpen } from "lucide-react";
 
@@ -56,6 +56,7 @@ const sortOptions: Array<{ value: StoryboardSort; label: string }> = [
 
 export default function StoryboardLibraryPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const sessionState = authClient.useSession();
   const sessionData = (sessionState.data as AuthSessionEnvelope | undefined) ?? null;
   const isAuthLoading = sessionState.isPending;
@@ -69,6 +70,18 @@ export default function StoryboardLibraryPage() {
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [novelOpen, setNovelOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+
+  // M3 #4 — auto-open the corresponding ingestion dialog when the chat
+  // agent routes here via `/storyboard?ingest=<mode>`. The producer still
+  // pastes their screenplay/idea/novel manually; we just save them the
+  // click of re-opening the dialog after approving in chat.
+  useEffect(() => {
+    const requested = searchParams?.get("ingest");
+    if (!requested) return;
+    if (requested === "screenplay") setScreenplayOpen(true);
+    else if (requested === "idea") setIdeaOpen(true);
+    else if (requested === "novel") setNovelOpen(true);
+  }, [searchParams]);
 
   const libraryRows = useQuery(
     queryRef("storyboards:listLibrary"),

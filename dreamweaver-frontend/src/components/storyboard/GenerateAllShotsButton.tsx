@@ -1,9 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import { Clapperboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShotBatchStream, type ShotBatchPhase } from "@/lib/sse-ingest";
+import {
+  SHOT_BATCH_TRIGGER_EVENT,
+  type ShotBatchTriggerDetail,
+} from "@/components/storyboard/StoryboardCopilotBridge";
 
 interface GenerateAllShotsButtonProps {
   storyboardId: string;
@@ -28,6 +32,30 @@ export function GenerateAllShotsButton({
     if (!storyboardId) return;
     await start({ storyboardId, skipExisting: true, concurrency: 3 });
   };
+
+  // M3 #4 — listen for agent-triggered batches. The bridge dispatches a
+  // SHOT_BATCH_TRIGGER_EVENT after the producer approves the
+  // `request_generate_shot_batch` HITL card in chat. We only honor events
+  // that target the currently loaded storyboard, and we refuse to start if
+  // a batch is already running.
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ShotBatchTriggerDetail>).detail;
+      if (!detail) return;
+      if (detail.storyboardId && detail.storyboardId !== storyboardId) return;
+      if (state.kind === "running") return;
+      void start({
+        storyboardId,
+        skipExisting: detail.skipExisting ?? true,
+        concurrency: Math.max(1, Math.min(6, detail.concurrency ?? 3)),
+      });
+    };
+    window.addEventListener(SHOT_BATCH_TRIGGER_EVENT, handler);
+    return () => window.removeEventListener(SHOT_BATCH_TRIGGER_EVENT, handler);
+  }, [start, state.kind, storyboardId]);
 
   const isBusy = state.kind === "running";
   const isDisabled = disabled || !storyboardId || isBusy;

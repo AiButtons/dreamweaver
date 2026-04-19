@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useCoAgent, useCopilotAction, useCopilotReadable, useHumanInTheLoop } from "@copilotkit/react-core";
 import { CopilotSidebar } from "@copilotkit/react-ui";
 import { useMutation } from "convex/react";
@@ -128,6 +129,147 @@ const parseRiskLevel = (value: unknown): DryRunRiskLevel => {
     return value;
   }
   return "medium";
+};
+
+// ---------------------------------------------------------------------------
+// M3 #4 — Agent/chat ingestion + shot-batch gating helpers.
+// ---------------------------------------------------------------------------
+
+type IngestionMode = "screenplay" | "idea" | "novel";
+
+export type IngestionRunInput = {
+  mode: IngestionMode;
+  title: string;
+  rationale: string;
+  hints: Record<string, string | number>;
+};
+
+export type GenerateShotBatchInput = {
+  storyboardId: string;
+  branchId: string;
+  nodeCount: number;
+  rationale: string;
+  skipExisting: boolean;
+  concurrency: number;
+};
+
+/**
+ * CustomEvent name the bridge dispatches to kick off the batch button. The
+ * `GenerateAllShotsButton` listens for this on `window` so the agent doesn't
+ * need an imperative handle on the button component — decoupling avoids
+ * having to thread a ref through the 2150-line storyboard page.
+ */
+export const SHOT_BATCH_TRIGGER_EVENT = "storyboard:generate-shot-batch";
+
+export type ShotBatchTriggerDetail = {
+  storyboardId: string;
+  skipExisting: boolean;
+  concurrency: number;
+};
+
+const dispatchShotBatchTrigger = (detail: ShotBatchTriggerDetail): void => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent<ShotBatchTriggerDetail>(SHOT_BATCH_TRIGGER_EVENT, { detail }),
+  );
+};
+
+const parseIngestionMode = (value: unknown): IngestionMode | null => {
+  if (value === "screenplay" || value === "idea" || value === "novel") {
+    return value;
+  }
+  return null;
+};
+
+const parseIngestionRunInput = (value: unknown): IngestionRunInput | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const mode = parseIngestionMode(value.mode);
+  const title = typeof value.title === "string" ? value.title : "";
+  const rationale = typeof value.rationale === "string" ? value.rationale : "";
+  if (!mode || !title) {
+    return null;
+  }
+  const rawHints = isRecord(value.hints) ? value.hints : {};
+  const hints: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(rawHints)) {
+    if (typeof v === "string" && v.length > 0) {
+      hints[k] = v;
+    } else if (typeof v === "number" && Number.isFinite(v)) {
+      hints[k] = v;
+    }
+  }
+  return { mode, title, rationale, hints };
+};
+
+const parseGenerateShotBatchInput = (value: unknown): GenerateShotBatchInput | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const storyboardId = typeof value.storyboardId === "string" ? value.storyboardId : "";
+  const branchId = typeof value.branchId === "string" ? value.branchId : "main";
+  const rationale = typeof value.rationale === "string" ? value.rationale : "";
+  const nodeCount = typeof value.nodeCount === "number" && Number.isFinite(value.nodeCount)
+    ? Math.max(0, Math.floor(value.nodeCount))
+    : 0;
+  const skipExistingRaw = value.skipExisting;
+  const skipExisting = typeof skipExistingRaw === "boolean" ? skipExistingRaw : true;
+  const concurrencyRaw = typeof value.concurrency === "number" && Number.isFinite(value.concurrency)
+    ? Math.floor(value.concurrency)
+    : 3;
+  const concurrency = Math.max(1, Math.min(6, concurrencyRaw));
+  if (!storyboardId) {
+    return null;
+  }
+  return {
+    storyboardId,
+    branchId,
+    nodeCount,
+    rationale,
+    skipExisting,
+    concurrency,
+  };
+};
+
+const capitalize = (s: string): string => (s.length === 0 ? s : s[0].toUpperCase() + s.slice(1));
+
+const HINT_LABELS: Record<string, string> = {
+  style: "Style",
+  userRequirement: "Constraints",
+  ideaSynopsis: "Synopsis",
+  novelExcerpt: "Excerpt",
+  screenplayExcerpt: "Excerpt",
+  targetEpisodeCount: "Episodes",
+  targetShotCount: "Shots",
+};
+
+const formatIngestionHintLines = (hints: Record<string, string | number>): string[] => {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(hints)) {
+    const label = HINT_LABELS[key] ?? key;
+    const rendered =
+      typeof value === "string" && value.length > 160 ? `${value.slice(0, 160)}…` : String(value);
+    lines.push(`• ${label}: ${rendered}`);
+  }
+  return lines;
+};
+
+/**
+ * Library page ingestion dialogs open automatically when these query params
+ * are present. Kept as a pure helper so both the approval handler and the
+ * unit tests can share the encoding.
+ */
+export const buildIngestionDialogHref = (input: IngestionRunInput): string => {
+  const params = new URLSearchParams();
+  params.set("ingest", input.mode);
+  if (input.title) params.set("title", input.title);
+  for (const [key, value] of Object.entries(input.hints)) {
+    params.set(`hint_${key}`, String(value));
+  }
+  return `/storyboard?${params.toString()}`;
 };
 
 const parseGraphPatchInput = (value: unknown): GraphPatchInput | null => {
@@ -560,6 +702,7 @@ export function StoryboardCopilotBridge({
 }) {
   const safeStoryboardId = storyboardId ?? "";
   const approvalsStable = approvals.length === 0 ? EMPTY_APPROVALS : approvals;
+  const router = useRouter();
   const graphSnapshot = useMemo(
     () => ({
       nodes: toAgentNodes(nodes),
@@ -1755,6 +1898,169 @@ export function StoryboardCopilotBridge({
     },
   });
 
+  useHumanInTheLoop({
+    name: "request_ingestion_run",
+    description:
+      "Approve/edit/reject opening the ingestion dialog (screenplay/idea/novel) with agent-suggested hints.",
+    parameters: [
+      { name: "mode", type: "string", description: "screenplay | idea | novel", required: true },
+      { name: "title", type: "string", description: "Proposed storyboard title", required: true },
+      { name: "rationale", type: "string", description: "Why this ingestion surface", required: true },
+      { name: "hints", type: "object", description: "Pre-fill hints", required: false },
+    ],
+    render: ({ args, status, respond }) => {
+      if (status !== "executing" || !respond) {
+        return <></>;
+      }
+      const input = parseIngestionRunInput(args);
+      if (!input) {
+        return (
+          <ToolStatusCard
+            name="request_ingestion_run"
+            status="failed"
+            args={JSON.stringify(args ?? {}, null, 2)}
+            result={JSON.stringify({ error: "Invalid ingestion run payload" })}
+          />
+        );
+      }
+      const hintLines = formatIngestionHintLines(input.hints);
+      const subtitle = `Open From-${capitalize(input.mode)} dialog`;
+      const body = [
+        input.rationale,
+        hintLines.length > 0 ? `Pre-fill:\n${hintLines.join("\n")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      return (
+        <ApprovalCard
+          title={input.title}
+          subtitle={subtitle}
+          body={body || "No additional rationale provided."}
+          onApprove={async () => {
+            const target = buildIngestionDialogHref(input);
+            router.push(target);
+            await auditToolCall({
+              tool: "request_ingestion_run",
+              result: "success",
+              details: { mode: input.mode, title: input.title },
+            });
+            respond({ approved: true, navigatedTo: target });
+          }}
+          onEdit={async () => {
+            const target = buildIngestionDialogHref(input);
+            router.push(target);
+            await auditToolCall({
+              tool: "request_ingestion_run",
+              result: "success",
+              details: { mode: input.mode, title: input.title, edited: true },
+            });
+            respond({
+              approved: true,
+              edited: true,
+              navigatedTo: target,
+              editedHints: input.hints,
+            });
+          }}
+          onReject={async () => {
+            await auditToolCall({
+              tool: "request_ingestion_run",
+              result: "blocked",
+              details: { mode: input.mode, title: input.title },
+            });
+            respond({
+              approved: false,
+              blockedReason: "Producer rejected ingestion run.",
+            });
+          }}
+        />
+      );
+    },
+  });
+
+  useHumanInTheLoop({
+    name: "request_generate_shot_batch",
+    description:
+      "Approve/edit/reject kicking off the Generate-All-Shots batch on the current storyboard.",
+    parameters: [
+      { name: "storyboardId", type: "string", description: "Storyboard id", required: true },
+      { name: "branchId", type: "string", description: "Branch id (main by default)", required: true },
+      { name: "nodeCount", type: "number", description: "Total shot count", required: true },
+      { name: "rationale", type: "string", description: "Why batch now", required: true },
+      { name: "skipExisting", type: "boolean", description: "Skip shots that already have media", required: false },
+      { name: "concurrency", type: "number", description: "Parallel workers (1-6)", required: false },
+    ],
+    render: ({ args, status, respond }) => {
+      if (status !== "executing" || !respond) {
+        return <></>;
+      }
+      const input = parseGenerateShotBatchInput(args);
+      if (!input) {
+        return (
+          <ToolStatusCard
+            name="request_generate_shot_batch"
+            status="failed"
+            args={JSON.stringify(args ?? {}, null, 2)}
+            result={JSON.stringify({ error: "Invalid shot batch payload" })}
+          />
+        );
+      }
+      const subtitle = `${input.nodeCount} shot${input.nodeCount === 1 ? "" : "s"} · concurrency ${input.concurrency} · skipExisting ${input.skipExisting ? "on" : "off"}`;
+      return (
+        <ApprovalCard
+          title="Generate all shot images"
+          subtitle={subtitle}
+          body={input.rationale || "Render every shot using linked character portraits."}
+          onApprove={async () => {
+            dispatchShotBatchTrigger({
+              storyboardId: input.storyboardId,
+              skipExisting: input.skipExisting,
+              concurrency: input.concurrency,
+            });
+            await auditToolCall({
+              tool: "request_generate_shot_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+              },
+            });
+            respond({ approved: true, dispatched: true });
+          }}
+          onEdit={async () => {
+            dispatchShotBatchTrigger({
+              storyboardId: input.storyboardId,
+              skipExisting: input.skipExisting,
+              concurrency: input.concurrency,
+            });
+            await auditToolCall({
+              tool: "request_generate_shot_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+                edited: true,
+              },
+            });
+            respond({ approved: true, edited: true, dispatched: true });
+          }}
+          onReject={async () => {
+            await auditToolCall({
+              tool: "request_generate_shot_batch",
+              result: "blocked",
+              details: { storyboardId: input.storyboardId },
+            });
+            respond({
+              approved: false,
+              blockedReason: "Producer rejected shot batch.",
+            });
+          }}
+        />
+      );
+    },
+  });
+
   return (
     <>
       <CopilotActionRegistration name="propose_branch" />
@@ -1776,6 +2082,9 @@ export function StoryboardCopilotBridge({
       <CopilotActionRegistration name="update_agent_team_member" />
       <CopilotActionRegistration name="publish_agent_team_revision" />
       <CopilotActionRegistration name="generate_team_from_prompt" />
+      <CopilotActionRegistration name="recommend_ingestion_path" />
+      <CopilotActionRegistration name="request_ingestion_run" />
+      <CopilotActionRegistration name="request_generate_shot_batch" />
       <CopilotSidebar
         defaultOpen={false}
         clickOutsideToClose
