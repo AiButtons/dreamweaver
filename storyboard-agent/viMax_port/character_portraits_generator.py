@@ -28,11 +28,39 @@ Style: {style}
 """
 
 
+def build_front_portrait_prompt(character: CharacterInScene, style: str) -> str:
+    """Format the ViMax front-portrait prompt without invoking any image
+    generator. M1's coordinator uses this to return prompts to the Next.js
+    ingestion route; the route then calls `/api/media/generate` (which runs
+    inside the same Next.js process and carries the user's Better Auth
+    session cookie) to produce the actual image URL.
+    """
+    features = (
+        "(static) "
+        + (character.static_features or "")
+        + "; (dynamic) "
+        + (character.dynamic_features or "")
+    )
+    return prompt_template_front.format(
+        identifier=character.identifier_in_scene,
+        features=features,
+        style=style,
+    )
+
+
 class CharacterPortraitsGenerator:
-    def __init__(self, image_generator) -> None:
+    def __init__(self, image_generator=None) -> None:
         # ViMax's upstream `__init__` only takes `image_generator`. We keep
-        # the same signature so any ViMax plug-in code works unchanged.
+        # the same signature so any ViMax plug-in code works unchanged — but
+        # for M1 the Python coordinator does NOT call `generate_front_portrait`
+        # directly (the media proxy wants session cookies Python can't hold).
+        # `image_generator` is allowed to be None in the prompt-only path.
         self.image_generator = image_generator
+
+    def build_front_prompt(self, character: CharacterInScene, style: str) -> str:
+        """Instance wrapper around `build_front_portrait_prompt` for callers
+        that already have a generator instance on hand."""
+        return build_front_portrait_prompt(character=character, style=style)
 
     @retry(stop=stop_after_attempt(3), after=_after_func, reraise=True)
     async def generate_front_portrait(
@@ -40,16 +68,11 @@ class CharacterPortraitsGenerator:
         character: CharacterInScene,
         style: str,
     ) -> Any:
-        features = (
-            "(static) "
-            + character.static_features
-            + "; (dynamic) "
-            + character.dynamic_features
-        )
-        prompt = prompt_template_front.format(
-            identifier=character.identifier_in_scene,
-            features=features,
-            style=style,
-        )
+        if self.image_generator is None:
+            raise RuntimeError(
+                "generate_front_portrait called without an image_generator; "
+                "use build_front_prompt() for the prompt-only path."
+            )
+        prompt = build_front_portrait_prompt(character=character, style=style)
         image_output = await self.image_generator.generate_single_image(prompt=prompt)
         return image_output

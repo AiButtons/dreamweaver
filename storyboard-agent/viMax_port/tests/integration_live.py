@@ -113,9 +113,9 @@ async def _main() -> int:
 
     from viMax_port import screenplay_ingester as ingester_module
 
-    # Monkey-patch MediaProxyImageGenerator so the coordinator's factory call
-    # returns our fake generator. Less invasive than threading a new arg in.
-    ingester_module.MediaProxyImageGenerator = lambda **_: _FakeImageGenerator()
+    # Phase 3: portraits are prompt-only now (Next.js fulfills). The fake
+    # image generator is no longer referenced by the coordinator, but we
+    # keep the class around so M2's side/back path can plug it back in.
 
     print("=" * 72)
     print(f"ViMax M1 live integration — model={os.environ.get('VIMAX_PORT_LLM_MODEL', 'gpt-5.4')}")
@@ -145,9 +145,9 @@ async def _main() -> int:
         static = c.staticFeatures[:80].replace("\n", " ")
         print(f"  - [{visible}] {c.identifier}: {static}...")
 
-    print(f"\nPortraits: {len(result.portraits)}")
+    print(f"\nPortrait prompts: {len(result.portraits)} (sourceUrl filled by Next.js)")
     for p in result.portraits:
-        print(f"  - {p.characterIdentifier} ({p.view}) → {p.sourceUrl}")
+        print(f"  - {p.characterIdentifier} ({p.view}) prompt_chars={len(p.prompt)}")
 
     print(f"\nNodes: {len(result.nodes)}  Edges: {len(result.edges)}")
     for n in result.nodes[:4]:
@@ -170,6 +170,9 @@ async def _main() -> int:
         f"expected {len(visible_chars)} portraits (1 per visible char), "
         f"got {len(result.portraits)}"
     )
+    for p in result.portraits:
+        assert p.sourceUrl == "", "Python side must leave sourceUrl blank for Next.js to fill"
+        assert p.prompt, "portrait prompt must be populated"
     if len(result.nodes) >= 2:
         assert len(result.edges) == len(result.nodes) - 1, (
             f"expected {len(result.nodes) - 1} serial edges, got {len(result.edges)}"

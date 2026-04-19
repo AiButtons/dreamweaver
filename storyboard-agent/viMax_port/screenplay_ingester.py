@@ -1,5 +1,14 @@
 """Coordinator: runs the full Phase 2 pipeline end-to-end and returns a
 structured IngestionResult that the Next.js route will write into Convex.
+
+Portrait generation is deliberately *prompt-only* here: the Dreamweaver
+media proxy at `/api/storyboard/media-proxy` requires Better Auth session
+cookies, which Python (called over the network from the Next.js ingestion
+route) can't carry. Instead we produce the ViMax portrait prompt strings
+and leave `sourceUrl` empty on each `IngestedPortrait`. The Next.js
+ingestion route fulfills the prompts via `/api/media/generate` (same
+Next.js process, session-cookie-authed) and writes the resolved URLs
+into Convex alongside the rest of the payload.
 """
 
 from __future__ import annotations
@@ -8,14 +17,13 @@ import asyncio
 import time
 
 from .character_extractor import CharacterExtractor
-from .character_portraits_generator import CharacterPortraitsGenerator
+from .character_portraits_generator import build_front_portrait_prompt
 from .llm_factory import make_chat_model
 from .mapper import (
     build_portrait,
     character_to_ingested,
     shots_and_edges_from_descriptions,
 )
-from .media_proxy import MediaProxyImageGenerator
 from .screenplay_preprocessor import maybe_preprocess_screenplay
 from .storyboard_artist import StoryboardArtist
 from .types import IngestionResult
@@ -27,17 +35,15 @@ async def ingest_screenplay(
     screenplay: str,
     style: str,
     user_requirement: str,
-    media_base_url: str,
-    auth_token: str,
+    # Retained for future auth-forwarding (e.g. M2 side/back reference-image
+    # generation that may need to hit the media proxy directly from Python).
+    media_base_url: str = "",  # noqa: ARG001
+    auth_token: str = "",  # noqa: ARG001
 ) -> IngestionResult:
     started = time.time()
     llm_calls = 0
 
     chat_model = make_chat_model()
-    image_generator = MediaProxyImageGenerator(
-        base_url=media_base_url,
-        auth_token=auth_token,
-    )
 
     # Stage 1: preprocessor (conditional)
     prose_script, did_preprocess = await maybe_preprocess_screenplay(
@@ -51,26 +57,17 @@ async def ingest_screenplay(
     characters = await extractor.extract_characters(script=prose_script)
     llm_calls += 1
 
-    # Stage 3: generate front-view portraits (bounded parallelism)
-    portraits_gen = CharacterPortraitsGenerator(image_generator=image_generator)
+    # Stage 3: build front-view portrait prompts (prompt-only — see module
+    # docstring). The Next.js route generates the actual images.
     visible_characters = [c for c in characters if c.is_visible]
-    portrait_tasks = [
-        portraits_gen.generate_front_portrait(character=c, style=style)
+    portraits = [
+        build_portrait(
+            character_id=c.identifier_in_scene,
+            source_url="",
+            prompt=build_front_portrait_prompt(character=c, style=style),
+        )
         for c in visible_characters
     ]
-    portrait_outputs = await asyncio.gather(*portrait_tasks, return_exceptions=True)
-    portraits = []
-    for c, output in zip(visible_characters, portrait_outputs):
-        if isinstance(output, Exception):
-            # Don't fail the whole ingestion for one bad portrait.
-            continue
-        portraits.append(
-            build_portrait(
-                character_id=c.identifier_in_scene,
-                source_url=output.sourceUrl,
-                prompt=f"Front-view portrait of {c.identifier_in_scene}",
-            )
-        )
 
     # Stage 4: design storyboard (brief descriptions)
     artist = StoryboardArtist(chat_model=chat_model)

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText } from "lucide-react";
+
+import { ScreenplayIngestForm } from "@/components/storyboard/ScreenplayIngestForm";
 
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { authClient } from "@/lib/auth-client";
@@ -61,6 +63,7 @@ export default function StoryboardLibraryPage() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<StoryboardSort>("updated_desc");
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [screenplayOpen, setScreenplayOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
 
   const libraryRows = useQuery(
@@ -167,13 +170,35 @@ export default function StoryboardLibraryPage() {
             </p>
           </div>
 
-          <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2">
-                <Plus className="size-4" />
-                New Storyboard
-              </Button>
-            </DialogTrigger>
+          <div className="flex items-center gap-2">
+            <Dialog open={screenplayOpen} onOpenChange={setScreenplayOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="gap-2">
+                  <FileText className="size-4" />
+                  From Screenplay
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Ingest a screenplay</DialogTitle>
+                  <DialogDescription>
+                    Paste a scene — we&apos;ll extract characters, generate
+                    portraits, and build a shot list with structured metadata.
+                  </DialogDescription>
+                </DialogHeader>
+                <ScreenplayIngestForm
+                  onIngested={() => setScreenplayOpen(false)}
+                />
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
+              <DialogTrigger asChild>
+                <Button className="gap-2">
+                  <Plus className="size-4" />
+                  New Storyboard
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>Choose a template</DialogTitle>
@@ -199,7 +224,8 @@ export default function StoryboardLibraryPage() {
                 ))}
               </div>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
