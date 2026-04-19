@@ -45,7 +45,7 @@ export const createMediaAsset = mutation({
   args: {
     storyboardId: v.id("storyboards"),
     nodeId: v.string(),
-    kind: v.union(v.literal("image"), v.literal("video")),
+    kind: v.union(v.literal("image"), v.literal("video"), v.literal("audio")),
     sourceUrl: v.string(),
     modelId: v.string(),
     prompt: v.string(),
@@ -87,25 +87,28 @@ export const createMediaAsset = mutation({
       )
       .unique();
     if (node) {
-      const nextImages = args.kind === "image"
-        ? [
-            ...node.media.images,
-            { mediaAssetId: assetId, url: args.sourceUrl, modelId: args.modelId, createdAt: now },
-          ]
-        : node.media.images;
-      const nextVideos = args.kind === "video"
-        ? [
-            ...node.media.videos,
-            { mediaAssetId: assetId, url: args.sourceUrl, modelId: args.modelId, createdAt: now },
-          ]
-        : node.media.videos;
+      const variant = {
+        mediaAssetId: assetId,
+        url: args.sourceUrl,
+        modelId: args.modelId,
+        createdAt: now,
+      };
+      const nextImages =
+        args.kind === "image" ? [...node.media.images, variant] : node.media.images;
+      const nextVideos =
+        args.kind === "video" ? [...node.media.videos, variant] : node.media.videos;
+      const existingAudios = node.media.audios ?? [];
+      const nextAudios =
+        args.kind === "audio" ? [...existingAudios, variant] : existingAudios;
 
       await ctx.db.patch(node._id, {
         media: {
           images: nextImages,
           videos: nextVideos,
+          audios: nextAudios,
           activeImageId: args.kind === "image" ? assetId : node.media.activeImageId,
           activeVideoId: args.kind === "video" ? assetId : node.media.activeVideoId,
+          activeAudioId: args.kind === "audio" ? assetId : node.media.activeAudioId,
         },
         updatedAt: now,
       });
@@ -131,7 +134,7 @@ export const startMediaGeneration = mutation({
   args: {
     storyboardId: v.id("storyboards"),
     nodeId: v.string(),
-    kind: v.union(v.literal("image"), v.literal("video")),
+    kind: v.union(v.literal("image"), v.literal("video"), v.literal("audio")),
     modelId: v.string(),
     prompt: v.string(),
     negativePrompt: v.optional(v.string()),
@@ -211,25 +214,31 @@ export const completeMediaGeneration = mutation({
       .unique();
     if (node) {
       const effectiveModelId = args.modelId ?? asset.modelId;
-      const nextImages = asset.kind === "image"
-        ? [
-            ...node.media.images,
-            { mediaAssetId: args.mediaAssetId, url: args.sourceUrl, modelId: effectiveModelId, createdAt: now },
-          ]
-        : node.media.images;
-      const nextVideos = asset.kind === "video"
-        ? [
-            ...node.media.videos,
-            { mediaAssetId: args.mediaAssetId, url: args.sourceUrl, modelId: effectiveModelId, createdAt: now },
-          ]
-        : node.media.videos;
+      const variant = {
+        mediaAssetId: args.mediaAssetId,
+        url: args.sourceUrl,
+        modelId: effectiveModelId,
+        createdAt: now,
+      };
+      const nextImages =
+        asset.kind === "image" ? [...node.media.images, variant] : node.media.images;
+      const nextVideos =
+        asset.kind === "video" ? [...node.media.videos, variant] : node.media.videos;
+      const existingAudios = node.media.audios ?? [];
+      const nextAudios =
+        asset.kind === "audio" ? [...existingAudios, variant] : existingAudios;
 
       await ctx.db.patch(node._id, {
         media: {
           images: nextImages,
           videos: nextVideos,
-          activeImageId: asset.kind === "image" ? args.mediaAssetId : node.media.activeImageId,
-          activeVideoId: asset.kind === "video" ? args.mediaAssetId : node.media.activeVideoId,
+          audios: nextAudios,
+          activeImageId:
+            asset.kind === "image" ? args.mediaAssetId : node.media.activeImageId,
+          activeVideoId:
+            asset.kind === "video" ? args.mediaAssetId : node.media.activeVideoId,
+          activeAudioId:
+            asset.kind === "audio" ? args.mediaAssetId : node.media.activeAudioId,
         },
         updatedAt: now,
       });

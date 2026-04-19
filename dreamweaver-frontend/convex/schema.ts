@@ -60,7 +60,7 @@ const secretStatusValidator = v.union(
 export default defineSchema({
   generations: defineTable({
     userId: v.string(),
-    kind: v.union(v.literal("image"), v.literal("video")),
+    kind: v.union(v.literal("image"), v.literal("video"), v.literal("audio")),
     prompt: v.string(),
     modelId: v.string(),
     resultUrls: v.array(v.string()),
@@ -201,8 +201,15 @@ export default defineSchema({
     media: v.object({
       images: v.array(mediaVariantValidator),
       videos: v.array(mediaVariantValidator),
+      // Per-shot TTS / ambient tracks. Sharing `mediaVariantValidator`
+      // keeps the schema narrow — audio assets look structurally like
+      // images + videos (url + modelId + createdAt) and flow through
+      // the same startMediaGeneration / completeMediaGeneration
+      // mutations with `kind: "audio"`.
+      audios: v.optional(v.array(mediaVariantValidator)),
       activeImageId: v.optional(v.id("mediaAssets")),
       activeVideoId: v.optional(v.id("mediaAssets")),
+      activeAudioId: v.optional(v.id("mediaAssets")),
     }),
     status: v.union(v.literal("draft"), v.literal("ready"), v.literal("blocked")),
     createdAt: v.number(),
@@ -375,7 +382,7 @@ export default defineSchema({
     storyboardId: v.id("storyboards"),
     userId: v.string(),
     nodeId: v.string(),
-    kind: v.union(v.literal("image"), v.literal("video")),
+    kind: v.union(v.literal("image"), v.literal("video"), v.literal("audio")),
     sourceUrl: v.string(),
     modelId: v.string(),
     prompt: v.string(),

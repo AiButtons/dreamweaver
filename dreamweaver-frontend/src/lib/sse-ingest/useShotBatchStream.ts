@@ -47,18 +47,26 @@ const INITIAL_STATE: ShotBatchState = {
 
 /** Which media surface the batch should target. Image renders shot
  *  stills via LTX-2.3/Zennah (fast path); video renders per-shot I2V
- *  clips via LTX-2.3 with the shot's existing image as keyframe 0. */
-export type ShotBatchMode = "image" | "video";
+ *  clips via LTX-2.3 with the shot's existing image as keyframe 0;
+ *  audio runs OpenAI TTS over each shot's narration text. */
+export type ShotBatchMode = "image" | "video" | "audio";
 
 export interface StartShotBatchInput {
   storyboardId: string;
   skipExisting?: boolean;
   concurrency?: number;
   /** Defaults to "image" for backwards compatibility with callers that
-   *  predate M4. Pass "video" to target the video batch route. */
+   *  predate M4. Pass "video" to target the video batch route,
+   *  "audio" to target the TTS batch. */
   mode?: ShotBatchMode;
   /** Optional model override, only consumed in `mode: "video"`. */
   videoModelId?: string;
+  /** TTS voice override, only consumed in `mode: "audio"`. */
+  voice?: string;
+  /** TTS model override, only consumed in `mode: "audio"`. */
+  model?: string;
+  /** TTS speed override, only consumed in `mode: "audio"`. */
+  speed?: number;
 }
 
 /** Client hook for /api/storyboard/generate-shots-stream. Tracks per-shot
@@ -103,15 +111,35 @@ export function useShotBatchStream() {
         const endpoint =
           mode === "video"
             ? "/api/storyboard/generate-shot-videos-stream"
-            : "/api/storyboard/generate-shots-stream";
+            : mode === "audio"
+              ? "/api/storyboard/generate-shot-audios-stream"
+              : "/api/storyboard/generate-shots-stream";
         // Strip `mode` from the body — the endpoint itself encodes the
-        // media kind, and the video route doesn't accept an arbitrary
-        // `mode` field. Keep videoModelId when it's meaningful.
+        // media kind. Each mode forwards only the params its route
+        // knows how to interpret.
         const { mode: _dropMode, ...rest } = input;
         const body =
           mode === "video"
-            ? rest
-            : { ...rest, videoModelId: undefined };
+            ? {
+                storyboardId: rest.storyboardId,
+                skipExisting: rest.skipExisting,
+                concurrency: rest.concurrency,
+                videoModelId: rest.videoModelId,
+              }
+            : mode === "audio"
+              ? {
+                  storyboardId: rest.storyboardId,
+                  skipExisting: rest.skipExisting,
+                  concurrency: rest.concurrency,
+                  voice: rest.voice,
+                  model: rest.model,
+                  speed: rest.speed,
+                }
+              : {
+                  storyboardId: rest.storyboardId,
+                  skipExisting: rest.skipExisting,
+                  concurrency: rest.concurrency,
+                };
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
