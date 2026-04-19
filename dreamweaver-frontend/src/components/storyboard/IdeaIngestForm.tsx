@@ -9,6 +9,14 @@ import { IngestProgressPanel } from "./IngestProgressPanel";
 
 interface IdeaIngestFormProps {
   onIngested?: (storyboardId: string) => void;
+  /** Pre-filled title when the chat supervisor routed the producer here. */
+  initialTitle?: string;
+  /** Pre-filled idea/synopsis text. */
+  initialIdea?: string;
+  /** Pre-filled visual-style directive. */
+  initialStyle?: string;
+  /** Pre-filled constraints / user-requirement hint. */
+  initialUserRequirement?: string;
 }
 
 const EXAMPLE_IDEAS: string[] = [
@@ -17,12 +25,18 @@ const EXAMPLE_IDEAS: string[] = [
   "A courier delivers a letter that arrives one year before it was sent.",
 ];
 
-export function IdeaIngestForm({ onIngested }: IdeaIngestFormProps) {
+export function IdeaIngestForm({
+  onIngested,
+  initialTitle,
+  initialIdea,
+  initialStyle,
+  initialUserRequirement,
+}: IdeaIngestFormProps) {
   const router = useRouter();
-  const [title, setTitle] = useState("");
-  const [idea, setIdea] = useState("");
-  const [style, setStyle] = useState("Cinematic, natural lighting");
-  const [userRequirement, setUserRequirement] = useState("");
+  const [title, setTitle] = useState(initialTitle ?? "");
+  const [idea, setIdea] = useState(initialIdea ?? "");
+  const [style, setStyle] = useState(initialStyle ?? "Cinematic, natural lighting");
+  const [userRequirement, setUserRequirement] = useState(initialUserRequirement ?? "");
   const { state, start } = useIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 

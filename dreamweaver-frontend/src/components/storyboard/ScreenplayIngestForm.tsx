@@ -10,6 +10,12 @@ import { IngestProgressPanel } from "./IngestProgressPanel";
 interface ScreenplayIngestFormProps {
   /** Called after successful ingestion so the parent can close its dialog. */
   onIngested?: (storyboardId: string) => void;
+  /** Pre-filled title when the chat supervisor routed the producer here. */
+  initialTitle?: string;
+  /** Pre-filled visual-style directive. */
+  initialStyle?: string;
+  /** Pre-filled constraints / user-requirement hint. */
+  initialUserRequirement?: string;
 }
 
 const EXAMPLE_PLACEHOLDER = `INT. ROOFTOP GARDEN - DUSK
@@ -24,12 +30,17 @@ ELENA (30s, dark coat) steps out behind him.
 ELENA
 We deliver, or we don't get paid.`;
 
-export function ScreenplayIngestForm({ onIngested }: ScreenplayIngestFormProps) {
+export function ScreenplayIngestForm({
+  onIngested,
+  initialTitle,
+  initialStyle,
+  initialUserRequirement,
+}: ScreenplayIngestFormProps) {
   const router = useRouter();
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(initialTitle ?? "");
   const [screenplay, setScreenplay] = useState("");
-  const [style, setStyle] = useState("Cinematic, natural lighting");
-  const [userRequirement, setUserRequirement] = useState("");
+  const [style, setStyle] = useState(initialStyle ?? "Cinematic, natural lighting");
+  const [userRequirement, setUserRequirement] = useState(initialUserRequirement ?? "");
   const { state, start } = useIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 

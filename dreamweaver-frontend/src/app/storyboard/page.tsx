@@ -72,15 +72,38 @@ export default function StoryboardLibraryPage() {
   const [isBusy, setIsBusy] = useState(false);
 
   // M3 #4 — auto-open the corresponding ingestion dialog when the chat
-  // agent routes here via `/storyboard?ingest=<mode>`. The producer still
-  // pastes their screenplay/idea/novel manually; we just save them the
-  // click of re-opening the dialog after approving in chat.
+  // agent routes here via `/storyboard?ingest=<mode>&title=...&hint_*=...`.
+  // The hint_* params become initial form values further below.
   useEffect(() => {
     const requested = searchParams?.get("ingest");
     if (!requested) return;
     if (requested === "screenplay") setScreenplayOpen(true);
     else if (requested === "idea") setIdeaOpen(true);
     else if (requested === "novel") setNovelOpen(true);
+  }, [searchParams]);
+
+  // Read hint_* query params once per searchParams change. Any absent hint
+  // resolves to undefined so the form falls back to its own default.
+  const ingestPrefill = useMemo(() => {
+    const title = searchParams?.get("title") ?? undefined;
+    const style = searchParams?.get("hint_style") ?? undefined;
+    const userRequirement = searchParams?.get("hint_userRequirement") ?? undefined;
+    const ideaSynopsis = searchParams?.get("hint_ideaSynopsis") ?? undefined;
+    const targetEpisodeRaw = searchParams?.get("hint_targetEpisodeCount");
+    const targetEpisodeCount =
+      targetEpisodeRaw !== null && targetEpisodeRaw !== undefined && targetEpisodeRaw.length > 0
+        ? Number.parseInt(targetEpisodeRaw, 10)
+        : undefined;
+    return {
+      title,
+      style,
+      userRequirement,
+      ideaSynopsis,
+      targetEpisodeCount:
+        typeof targetEpisodeCount === "number" && Number.isFinite(targetEpisodeCount)
+          ? targetEpisodeCount
+          : undefined,
+    };
   }, [searchParams]);
 
   const libraryRows = useQuery(
@@ -204,7 +227,13 @@ export default function StoryboardLibraryPage() {
                     Characters + portraits are shared across every episode.
                   </DialogDescription>
                 </DialogHeader>
-                <NovelIngestForm onIngested={() => setNovelOpen(false)} />
+                <NovelIngestForm
+                  onIngested={() => setNovelOpen(false)}
+                  initialTitle={ingestPrefill.title}
+                  initialStyle={ingestPrefill.style}
+                  initialUserRequirement={ingestPrefill.userRequirement}
+                  initialTargetEpisodeCount={ingestPrefill.targetEpisodeCount}
+                />
               </DialogContent>
             </Dialog>
 
@@ -223,7 +252,13 @@ export default function StoryboardLibraryPage() {
                     it into scenes, and build the storyboard end-to-end.
                   </DialogDescription>
                 </DialogHeader>
-                <IdeaIngestForm onIngested={() => setIdeaOpen(false)} />
+                <IdeaIngestForm
+                  onIngested={() => setIdeaOpen(false)}
+                  initialTitle={ingestPrefill.title}
+                  initialIdea={ingestPrefill.ideaSynopsis}
+                  initialStyle={ingestPrefill.style}
+                  initialUserRequirement={ingestPrefill.userRequirement}
+                />
               </DialogContent>
             </Dialog>
 
@@ -244,6 +279,9 @@ export default function StoryboardLibraryPage() {
                 </DialogHeader>
                 <ScreenplayIngestForm
                   onIngested={() => setScreenplayOpen(false)}
+                  initialTitle={ingestPrefill.title}
+                  initialStyle={ingestPrefill.style}
+                  initialUserRequirement={ingestPrefill.userRequirement}
                 />
               </DialogContent>
             </Dialog>

@@ -11,6 +11,14 @@ import {
 
 interface NovelIngestFormProps {
   onIngested?: (storyboardId: string) => void;
+  /** Pre-filled title when the chat supervisor routed the producer here. */
+  initialTitle?: string;
+  /** Pre-filled visual-style directive. */
+  initialStyle?: string;
+  /** Pre-filled constraints / user-requirement hint. */
+  initialUserRequirement?: string;
+  /** Pre-filled target episode count (1-10). */
+  initialTargetEpisodeCount?: number;
 }
 
 const EPISODE_PHASE_CLASS: Record<EpisodePhase, string> = {
@@ -36,13 +44,23 @@ const STAGE_LABELS: Record<string, string> = {
   complete: "Complete",
 };
 
-export function NovelIngestForm({ onIngested }: NovelIngestFormProps) {
+export function NovelIngestForm({
+  onIngested,
+  initialTitle,
+  initialStyle,
+  initialUserRequirement,
+  initialTargetEpisodeCount,
+}: NovelIngestFormProps) {
   const router = useRouter();
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(initialTitle ?? "");
   const [novel, setNovel] = useState("");
-  const [style, setStyle] = useState("Cinematic, natural lighting");
-  const [userRequirement, setUserRequirement] = useState("");
-  const [targetCount, setTargetCount] = useState<number | "">("");
+  const [style, setStyle] = useState(initialStyle ?? "Cinematic, natural lighting");
+  const [userRequirement, setUserRequirement] = useState(initialUserRequirement ?? "");
+  const [targetCount, setTargetCount] = useState<number | "">(
+    typeof initialTargetEpisodeCount === "number"
+      ? Math.max(1, Math.min(10, Math.floor(initialTargetEpisodeCount)))
+      : "",
+  );
   const { state, start } = useNovelIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 
