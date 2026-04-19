@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText, Lightbulb } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText, Lightbulb, BookOpen } from "lucide-react";
 
 import { ScreenplayIngestForm } from "@/components/storyboard/ScreenplayIngestForm";
 import { IdeaIngestForm } from "@/components/storyboard/IdeaIngestForm";
+import { NovelIngestForm } from "@/components/storyboard/NovelIngestForm";
 
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { authClient } from "@/lib/auth-client";
@@ -66,6 +67,7 @@ export default function StoryboardLibraryPage() {
   const [templateOpen, setTemplateOpen] = useState(false);
   const [screenplayOpen, setScreenplayOpen] = useState(false);
   const [ideaOpen, setIdeaOpen] = useState(false);
+  const [novelOpen, setNovelOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
 
   const libraryRows = useQuery(
@@ -173,6 +175,26 @@ export default function StoryboardLibraryPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Dialog open={novelOpen} onOpenChange={setNovelOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="gap-2">
+                  <BookOpen className="size-4" />
+                  From Novel
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>Ingest a novel</DialogTitle>
+                  <DialogDescription>
+                    Paste a chapter or full novel — we&apos;ll compress it,
+                    split it into episodes, and build a storyboard for each.
+                    Characters + portraits are shared across every episode.
+                  </DialogDescription>
+                </DialogHeader>
+                <NovelIngestForm onIngested={() => setNovelOpen(false)} />
+              </DialogContent>
+            </Dialog>
+
             <Dialog open={ideaOpen} onOpenChange={setIdeaOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" className="gap-2">
