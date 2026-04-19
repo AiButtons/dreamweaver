@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pin, PinOff, Copy, Trash2, RotateCcw, FolderOpen, FileText, Lightbulb } from "lucide-react";
 
 import { ScreenplayIngestForm } from "@/components/storyboard/ScreenplayIngestForm";
+import { IdeaIngestForm } from "@/components/storyboard/IdeaIngestForm";
 
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { authClient } from "@/lib/auth-client";
@@ -64,6 +65,7 @@ export default function StoryboardLibraryPage() {
   const [sort, setSort] = useState<StoryboardSort>("updated_desc");
   const [templateOpen, setTemplateOpen] = useState(false);
   const [screenplayOpen, setScreenplayOpen] = useState(false);
+  const [ideaOpen, setIdeaOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
 
   const libraryRows = useQuery(
@@ -171,6 +173,25 @@ export default function StoryboardLibraryPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Dialog open={ideaOpen} onOpenChange={setIdeaOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="gap-2">
+                  <Lightbulb className="size-4" />
+                  From Idea
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Turn an idea into a storyboard</DialogTitle>
+                  <DialogDescription>
+                    A one-liner is enough. We&apos;ll develop a story, split
+                    it into scenes, and build the storyboard end-to-end.
+                  </DialogDescription>
+                </DialogHeader>
+                <IdeaIngestForm onIngested={() => setIdeaOpen(false)} />
+              </DialogContent>
+            </Dialog>
+
             <Dialog open={screenplayOpen} onOpenChange={setScreenplayOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" className="gap-2">
