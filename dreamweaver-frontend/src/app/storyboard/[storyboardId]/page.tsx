@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   useNodesState,
@@ -28,6 +28,10 @@ import { ProductionHubDrawer } from "@/components/storyboard/ProductionHubDrawer
 import { ExportMenu } from "@/components/storyboard/ExportMenu";
 import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
 import { CameoUploadDialog } from "@/components/storyboard/CameoUploadDialog";
+import {
+  SHOT_BATCH_TRIGGER_EVENT,
+  type ShotBatchTriggerDetail,
+} from "@/components/storyboard/StoryboardCopilotBridge";
 import {
   runShotValidators,
   SHOT_VALIDATOR_CODE_PREFIXES,
@@ -238,6 +242,8 @@ export default function StoryboardPage({ storyboardIdOverride = null }: Storyboa
 
 function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const params = useParams<{ storyboardId: string }>();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const storyboardMode = "graph_studio" as const;
   const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
@@ -256,6 +262,57 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const activeStoryboardId = storyboardIdOverride ?? params?.storyboardId ?? null;
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [cameoDialogOpen, setCameoDialogOpen] = useState(false);
+
+  // Loose end #2 — cross-storyboard batch trigger. The bridge may navigate
+  // here from a different storyboard's approval card with query params
+  // describing the pending shot batch. We dispatch the CustomEvent the
+  // GenerateAllShotsButton listens for, then strip the params so a page
+  // refresh doesn't re-fire the batch.
+  useEffect(() => {
+    if (!activeStoryboardId) return;
+    if (!searchParams) return;
+    const trigger = searchParams.get("triggerBatch");
+    if (trigger !== "1") return;
+    const skipExisting = searchParams.get("batchSkipExisting") !== "0";
+    const concurrencyRaw = Number.parseInt(
+      searchParams.get("batchConcurrency") ?? "3",
+      10,
+    );
+    const concurrency = Math.max(
+      1,
+      Math.min(6, Number.isFinite(concurrencyRaw) ? concurrencyRaw : 3),
+    );
+    const detail: ShotBatchTriggerDetail = {
+      storyboardId: activeStoryboardId,
+      skipExisting,
+      concurrency,
+    };
+    // Small delay lets GenerateAllShotsButton finish mounting its listener
+    // before the event fires — React flushes this effect after commit so
+    // the button's effect is already registered in practice, but we yield
+    // one tick defensively.
+    const timer = window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent<ShotBatchTriggerDetail>(SHOT_BATCH_TRIGGER_EVENT, { detail }),
+      );
+    }, 0);
+    // Strip the trigger params so a reload doesn't re-fire. Preserves any
+    // other params the user may have in the URL.
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("triggerBatch");
+    next.delete("batchSkipExisting");
+    next.delete("batchConcurrency");
+    const cleanedQuery = next.toString();
+    router.replace(
+      cleanedQuery.length > 0
+        ? `/storyboard/${activeStoryboardId}?${cleanedQuery}`
+        : `/storyboard/${activeStoryboardId}`,
+      { scroll: false },
+    );
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeStoryboardId, router, searchParams]);
   const [leftTab, setLeftTab] = useState<"outline" | "assistant">("outline");
   const [inspectorAnchor, setInspectorAnchor] = useState<{ x: number; y: number } | null>(null);
   const graphCanvasRef = useRef<HTMLDivElement | null>(null);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   buildIngestionDialogHref,
+  buildShotBatchNavHref,
   type IngestionRunInput,
 } from "@/components/storyboard/StoryboardCopilotBridge";
 
@@ -60,5 +61,58 @@ describe("buildIngestionDialogHref", () => {
       hints: { style: "Whimsical" },
     };
     expect(buildIngestionDialogHref(input)).toBe(buildIngestionDialogHref(input));
+  });
+});
+
+// Loose end #2 — the bridge navigates across storyboards by encoding the
+// deferred shot-batch trigger as URL params. `buildShotBatchNavHref`
+// produces the target href; the destination page reads the params on
+// mount and dispatches the CustomEvent.
+describe("buildShotBatchNavHref", () => {
+  it("encodes storyboardId in the path segment", () => {
+    const href = buildShotBatchNavHref({
+      storyboardId: "sb_42",
+      skipExisting: true,
+      concurrency: 3,
+    });
+    expect(href).toMatch(/^\/storyboard\/sb_42\?/);
+  });
+
+  it("encodes skipExisting as 1/0 and clamps concurrency", () => {
+    const a = buildShotBatchNavHref({
+      storyboardId: "sb_42",
+      skipExisting: true,
+      concurrency: 99,
+    });
+    const b = buildShotBatchNavHref({
+      storyboardId: "sb_42",
+      skipExisting: false,
+      concurrency: -5,
+    });
+    const aParams = new URLSearchParams(a.split("?")[1]);
+    const bParams = new URLSearchParams(b.split("?")[1]);
+    expect(aParams.get("batchSkipExisting")).toBe("1");
+    expect(aParams.get("batchConcurrency")).toBe("6");
+    expect(bParams.get("batchSkipExisting")).toBe("0");
+    expect(bParams.get("batchConcurrency")).toBe("1");
+  });
+
+  it("always sets triggerBatch=1", () => {
+    const href = buildShotBatchNavHref({
+      storyboardId: "sb_99",
+      skipExisting: true,
+      concurrency: 2,
+    });
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("triggerBatch")).toBe("1");
+  });
+
+  it("URL-encodes awkward storyboardId characters", () => {
+    const href = buildShotBatchNavHref({
+      storyboardId: "sb with spaces/slash",
+      skipExisting: true,
+      concurrency: 3,
+    });
+    expect(href).toMatch(/^\/storyboard\/sb%20with%20spaces%2Fslash\?/);
   });
 });

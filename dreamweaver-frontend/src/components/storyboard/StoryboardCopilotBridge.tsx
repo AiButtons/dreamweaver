@@ -176,6 +176,23 @@ const dispatchShotBatchTrigger = (detail: ShotBatchTriggerDetail): void => {
   );
 };
 
+/**
+ * Build the storyboard-editor URL that carries a deferred shot-batch
+ * trigger as query params. The target page reads these on mount via
+ * `consumeShotBatchTriggerParams`, dispatches the CustomEvent the button
+ * listens for, and strips the params so a refresh doesn't re-fire.
+ *
+ * Shared as an exported helper so bridge tests and the storyboard page
+ * round-trip the same encoding.
+ */
+export const buildShotBatchNavHref = (detail: ShotBatchTriggerDetail): string => {
+  const params = new URLSearchParams();
+  params.set("triggerBatch", "1");
+  params.set("batchSkipExisting", detail.skipExisting ? "1" : "0");
+  params.set("batchConcurrency", String(Math.max(1, Math.min(6, detail.concurrency))));
+  return `/storyboard/${encodeURIComponent(detail.storyboardId)}?${params.toString()}`;
+};
+
 const parseIngestionMode = (value: unknown): IngestionMode | null => {
   if (value === "screenplay" || value === "idea" || value === "novel") {
     return value;
@@ -2004,18 +2021,33 @@ export function StoryboardCopilotBridge({
           />
         );
       }
-      const subtitle = `${input.nodeCount} shot${input.nodeCount === 1 ? "" : "s"} · concurrency ${input.concurrency} · skipExisting ${input.skipExisting ? "on" : "off"}`;
+      const isOnTargetStoryboard =
+        Boolean(storyboardId) && storyboardId === input.storyboardId;
+      const subtitle = `${input.nodeCount} shot${input.nodeCount === 1 ? "" : "s"} · concurrency ${input.concurrency} · skipExisting ${input.skipExisting ? "on" : "off"}${isOnTargetStoryboard ? "" : " · will navigate"}`;
+
+      const startBatch = () => {
+        const detail: ShotBatchTriggerDetail = {
+          storyboardId: input.storyboardId,
+          skipExisting: input.skipExisting,
+          concurrency: input.concurrency,
+        };
+        if (isOnTargetStoryboard) {
+          dispatchShotBatchTrigger(detail);
+          return { navigated: false, dispatched: true };
+        }
+        // Cross-storyboard trigger — navigate to the target editor, which
+        // reads the query params on mount and dispatches the event itself.
+        router.push(buildShotBatchNavHref(detail));
+        return { navigated: true, dispatched: false };
+      };
+
       return (
         <ApprovalCard
           title="Generate all shot images"
           subtitle={subtitle}
           body={input.rationale || "Render every shot using linked character portraits."}
           onApprove={async () => {
-            dispatchShotBatchTrigger({
-              storyboardId: input.storyboardId,
-              skipExisting: input.skipExisting,
-              concurrency: input.concurrency,
-            });
+            const outcome = startBatch();
             await auditToolCall({
               tool: "request_generate_shot_batch",
               result: "success",
@@ -2023,16 +2055,13 @@ export function StoryboardCopilotBridge({
                 storyboardId: input.storyboardId,
                 nodeCount: input.nodeCount,
                 concurrency: input.concurrency,
+                navigated: outcome.navigated,
               },
             });
-            respond({ approved: true, dispatched: true });
+            respond({ approved: true, ...outcome });
           }}
           onEdit={async () => {
-            dispatchShotBatchTrigger({
-              storyboardId: input.storyboardId,
-              skipExisting: input.skipExisting,
-              concurrency: input.concurrency,
-            });
+            const outcome = startBatch();
             await auditToolCall({
               tool: "request_generate_shot_batch",
               result: "success",
@@ -2040,10 +2069,11 @@ export function StoryboardCopilotBridge({
                 storyboardId: input.storyboardId,
                 nodeCount: input.nodeCount,
                 concurrency: input.concurrency,
+                navigated: outcome.navigated,
                 edited: true,
               },
             });
-            respond({ approved: true, edited: true, dispatched: true });
+            respond({ approved: true, edited: true, ...outcome });
           }}
           onReject={async () => {
             await auditToolCall({
