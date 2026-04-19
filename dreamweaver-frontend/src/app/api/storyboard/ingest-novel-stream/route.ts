@@ -480,6 +480,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         const perEpisodeSpan = 15.0 / Math.max(pythonResult.episodes.length, 1); // 85-100%
         let totalShotsWritten = 0;
         let totalEdgesWritten = 0;
+        // Track episode write failures so the final done payload can warn
+        // the producer that part of the storyboard is incomplete. A mid-
+        // loop continue on a failed episode previously left the done
+        // event reporting success even when 2/5 episodes wrote 0 shots.
+        const episodeFailures: Array<{
+          episodeIndex: number;
+          title: string;
+          error: string;
+        }> = [];
         for (const episode of pythonResult.episodes) {
           const episodePercent = 85.0 + episode.index * perEpisodeSpan;
           send("episode_writing", {
@@ -541,6 +550,11 @@ export async function POST(request: NextRequest): Promise<Response> {
             }
           } catch (err) {
             const msg = err instanceof Error ? err.message : "episode write failed";
+            episodeFailures.push({
+              episodeIndex: episode.index,
+              title: episode.title,
+              error: msg,
+            });
             send("episode_failed", {
               episodeIndex: episode.index,
               title: episode.title,
@@ -573,6 +587,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           portraitFailureCount: portraitFailures.length,
           portraitFailures,
           episodeCount: pythonResult.episodes.length,
+          episodesFailedCount: episodeFailures.length,
+          episodeFailures,
           nodeCount: totalShotsWritten,
           edgeCount: totalEdgesWritten,
           llmCallCount: pythonResult.llmCallCount,

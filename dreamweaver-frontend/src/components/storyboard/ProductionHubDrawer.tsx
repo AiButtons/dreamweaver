@@ -178,7 +178,13 @@ export function ProductionHubDrawer(props: {
         </Button>
       </SheetTrigger>
 
-      <SheetContent side="right" className="w-[420px] sm:max-w-[420px] p-0">
+      <SheetContent
+        side="right"
+        // Wider drawer (560px) so identity-pack DNA + the 3-view strip
+        // have enough room to breathe. 420px was cramping the character
+        // list that the Continuity tab renders after ingestion.
+        className="w-[560px] sm:max-w-[560px] p-0"
+      >
         <SheetHeader className="border-b border-border/60">
           <SheetTitle className="flex items-center gap-2">
             <Briefcase className="size-4 text-muted-foreground" />

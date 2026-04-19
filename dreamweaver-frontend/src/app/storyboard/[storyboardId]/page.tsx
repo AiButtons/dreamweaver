@@ -319,6 +319,12 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const bootstrappedTeamsRef = useRef(false);
   const touchedStoryboardRef = useRef<string | null>(null);
   const sweptMediaRef = useRef<string | null>(null);
+  // Tracks the storyboardId the canvas has already auto-fit for so we
+  // only call fitView once per storyboard open. Without this, multi-
+  // episode novels land with all shots off-screen because the default
+  // ReactFlow viewport is centered on (0, 0) but our layout spreads
+  // episodes across x-offsets of 5000px.
+  const autoFitStoryboardRef = useRef<string | null>(null);
   const sessionState = authClient.useSession();
   const sessionData = (sessionState.data as AuthSessionEnvelope | undefined) ?? null;
   const isAuthLoading = sessionState.isPending;
@@ -1091,6 +1097,23 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
       rfInstance.fitView({ padding: 0.2, duration: 800 });
     }
   }, [rfInstance]);
+
+  // Auto-fit the canvas once the first populated snapshot lands. Triggers
+  // when (a) the ReactFlow instance mounts, (b) we know the active
+  // storyboardId, and (c) nodes have loaded. Keyed on storyboardId so
+  // switching storyboards re-fits; keyed on a ref so we don't re-fit on
+  // every drag/zoom after the initial load.
+  useEffect(() => {
+    if (!rfInstance || !activeStoryboardId) return;
+    if (nodes.length === 0) return;
+    if (autoFitStoryboardRef.current === activeStoryboardId) return;
+    autoFitStoryboardRef.current = activeStoryboardId;
+    // Small delay lets the canvas lay out nodes before we measure.
+    const timer = window.setTimeout(() => {
+      rfInstance.fitView({ padding: 0.15, duration: 400 });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [activeStoryboardId, nodes.length, rfInstance]);
   const handleZoomIn = useCallback(() => {
     if (rfInstance) {
       rfInstance.zoomIn({ duration: 500 });

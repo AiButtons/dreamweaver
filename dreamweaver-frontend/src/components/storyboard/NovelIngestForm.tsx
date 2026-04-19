@@ -61,13 +61,17 @@ export function NovelIngestForm({
       ? Math.max(1, Math.min(10, Math.floor(initialTargetEpisodeCount)))
       : "",
   );
-  const { state, start } = useNovelIngestStream();
+  const { state, start, cancel } = useNovelIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setClientError(null);
     const trimmed = novel.trim();
+    if (trimmed.length === 0) {
+      setClientError("Paste a novel before submitting.");
+      return;
+    }
     if (trimmed.length < 200) {
       setClientError("Novel text is too short (200+ chars required).");
       return;
@@ -229,7 +233,7 @@ export function NovelIngestForm({
           ) : null}
           {state.portraits ? (
             <div className="mt-1 text-[10px] text-muted-foreground">
-              {state.portraits.phase === "side_back" ? "Side + back" : "Front"} portraits:{" "}
+              Portraits ({state.portraits.phase === "side_back" ? "side + back" : "front"}):{" "}
               {state.portraits.done} / {state.portraits.total}
             </div>
           ) : null}
@@ -293,34 +297,66 @@ export function NovelIngestForm({
       ) : null}
 
       {state.kind === "done" && state.done ? (
-        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-200">
-          Ingested — {state.done.episodeCount} episode
-          {state.done.episodeCount === 1 ? "" : "s"}, {state.done.nodeCount} total shots
-          across {state.done.characterCount} character
-          {state.done.characterCount === 1 ? "" : "s"} in{" "}
-          {Math.round(state.done.totalDurationMs / 100) / 10}s. Opening storyboard…
+        <div
+          className={
+            (state.done.episodesFailedCount ?? 0) > 0
+              ? "rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200"
+              : "rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-200"
+          }
+        >
+          <div>
+            Ingested — {state.done.episodeCount - (state.done.episodesFailedCount ?? 0)} of{" "}
+            {state.done.episodeCount} episode{state.done.episodeCount === 1 ? "" : "s"},{" "}
+            {state.done.nodeCount} total shots across {state.done.characterCount} character
+            {state.done.characterCount === 1 ? "" : "s"} in{" "}
+            {Math.round(state.done.totalDurationMs / 100) / 10}s. Opening storyboard…
+          </div>
+          {state.done.episodeFailures && state.done.episodeFailures.length > 0 ? (
+            <ul className="mt-1.5 space-y-0.5 text-[10px] opacity-90">
+              {state.done.episodeFailures.slice(0, 4).map((f) => (
+                <li key={f.episodeIndex}>
+                  · Ep {f.episodeIndex + 1} ({f.title || "untitled"}) — {f.error}
+                </li>
+              ))}
+              {state.done.episodeFailures.length > 4 ? (
+                <li>· +{state.done.episodeFailures.length - 4} more</li>
+              ) : null}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">
           {isBusy
             ? "Streaming live progress from the novel pipeline."
-            : "Novel → Episodes → Storyboards. Typical run: 2–6 min depending on length."}
+            : "Novel → Episodes → Storyboards. Typical run 5–15 minutes — chunking + compression + per-episode ingestion add up fast for full novels."}
         </p>
-        <Button type="submit" disabled={isBusy} className="gap-2">
+        <div className="flex items-center gap-2">
           {isBusy ? (
-            <>
-              <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-              Ingesting…
-            </>
-          ) : (
-            <>
-              <BookOpen className="size-4" />
-              Ingest novel
-            </>
-          )}
-        </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => cancel()}
+              className="gap-1.5"
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button type="submit" disabled={isBusy} className="gap-2">
+            {isBusy ? (
+              <>
+                <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                Ingesting…
+              </>
+            ) : (
+              <>
+                <BookOpen className="size-4" />
+                Ingest novel
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </form>
   );

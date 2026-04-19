@@ -37,8 +37,11 @@ export function IngestProgressPanel({ state }: IngestProgressPanelProps) {
   const detailLines: string[] = [];
   if (state.portraits) {
     const { done, total, phase } = state.portraits;
-    const phaseLabel = phase === "side_back" ? "Side + back" : "Front";
-    detailLines.push(`${phaseLabel} portraits: ${done}/${total}`);
+    // Label is "Portraits (front)" / "Portraits (side + back)" — the
+    // earlier "Front portraits: 2/6" was confusing when the running
+    // total included side+back.
+    const phaseLabel = phase === "side_back" ? "side + back" : "front";
+    detailLines.push(`Portraits (${phaseLabel}): ${done}/${total}`);
   }
   if (state.write) {
     const { kind, done, total } = state.write;
@@ -53,6 +56,24 @@ export function IngestProgressPanel({ state }: IngestProgressPanelProps) {
     detailLines.push(`${kindLabel}: ${done}/${total}`);
   }
 
+  // A stage event set the percent; if it hasn't moved in a while we show
+  // a shimmer animation on the filled portion so the producer knows the
+  // pipeline is still alive even when a stage takes minutes (e.g. GPT-5.4
+  // develop_story can park us at 6% for 2-3 minutes).
+  const isRunning = state.kind === "running";
+  const barClassName = [
+    "h-full rounded-full transition-all duration-300",
+    state.kind === "error"
+      ? "bg-rose-500"
+      : state.kind === "done"
+        ? "bg-emerald-500"
+        : "bg-primary",
+    // Overlay a subtle animated gradient on running bars.
+    isRunning ? "ingest-bar-pulse" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div className="rounded-xl border border-border/60 bg-card/40 p-3">
       <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -62,16 +83,7 @@ export function IngestProgressPanel({ state }: IngestProgressPanelProps) {
         </span>
       </div>
       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted/40">
-        <div
-          className={
-            state.kind === "error"
-              ? "h-full rounded-full bg-rose-500 transition-all duration-300"
-              : state.kind === "done"
-                ? "h-full rounded-full bg-emerald-500 transition-all duration-300"
-                : "h-full rounded-full bg-primary transition-all duration-300"
-          }
-          style={{ width: `${percent}%` }}
-        />
+        <div className={barClassName} style={{ width: `${percent}%` }} />
       </div>
       {state.message ? (
         <div className="mt-2 text-[11px] text-muted-foreground">{state.message}</div>

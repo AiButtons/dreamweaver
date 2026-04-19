@@ -37,13 +37,17 @@ export function IdeaIngestForm({
   const [idea, setIdea] = useState(initialIdea ?? "");
   const [style, setStyle] = useState(initialStyle ?? "Cinematic, natural lighting");
   const [userRequirement, setUserRequirement] = useState(initialUserRequirement ?? "");
-  const { state, start } = useIngestStream();
+  const { state, start, cancel } = useIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setClientError(null);
     const trimmed = idea.trim();
+    if (trimmed.length === 0) {
+      setClientError("Type an idea before submitting.");
+      return;
+    }
     if (trimmed.length < 5) {
       setClientError("Idea is too short (5+ chars required).");
       return;
@@ -170,25 +174,37 @@ export function IdeaIngestForm({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">
           {isBusy
             ? "Streaming live progress from the idea pipeline."
             : "Idea → Story → Screenplay → Storyboard. Typical run 4–8 minutes (two extra LLM passes expand your one-liner into a full narrative before the M1 pipeline runs)."}
         </p>
-        <Button type="submit" disabled={isBusy} className="gap-2">
+        <div className="flex items-center gap-2">
           {isBusy ? (
-            <>
-              <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-              Developing…
-            </>
-          ) : (
-            <>
-              <Lightbulb className="size-4" />
-              Ingest idea
-            </>
-          )}
-        </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => cancel()}
+              className="gap-1.5"
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button type="submit" disabled={isBusy} className="gap-2">
+            {isBusy ? (
+              <>
+                <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                Developing…
+              </>
+            ) : (
+              <>
+                <Lightbulb className="size-4" />
+                Ingest idea
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </form>
   );

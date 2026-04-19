@@ -49,7 +49,7 @@ a list of character objects with `idx`, `identifier_in_scene`, `is_visible`,
 `static_features`, and `dynamic_features`.
 
 [Guidelines]
-- Ensure that the language of all output values(not include keys) matches that used in the script.
+- Write every output value in English, regardless of the script's language. The downstream portrait generator + continuity UI expects English prose, so even if the input script is in Spanish, French, Japanese, etc., translate the character descriptions into clear, visually concrete English.
 - Group all names referring to the same entity under one character. Select the most appropriate name as the character's identifier. If the person is a real famous person, the real person's name should be retained (e.g., Elon Musk, Bill Gates)
 - If the character's name is not mentioned, you can use reasonable pronouns to refer to them, including using their occupation or notable physical traits. For example, "the young woman" or "the barista".
 - For background characters in the script, you do not need to consider them as individual characters.

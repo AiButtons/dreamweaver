@@ -60,7 +60,7 @@ be an ordered list of shots. Each shot must carry `idx` (0-based), `is_last`,
 `audio_desc`.
 
 [Guidelines]
-- Ensure all output values (except keys) match the language used in the script.
+- Write every output value in English, regardless of the script's language. The downstream shot-image generator + Next.js UI expects English prose, so translate visual descriptions + audio descriptions into English even when the script is in another language.
 - Each shot must have a clear narrative purpose—such as establishing the setting, showing character relationships, or highlighting reactions.
 - Use cinematic language deliberately: close-ups for emotion, wide shots for context, and varied angles to direct audience attention.
 - When designing a new shot, first consider whether it can be filmed using an existing camera position. Introduce a new one only if the shot size, angle, and focus differ significantly. If the camera undergoes significant movement, it cannot be used thereafter.
@@ -123,7 +123,7 @@ in the first frame:
   * "unknown" — only when the description is genuinely ambiguous.
 
 [Guidelines]
-- Ensure all output values (except keys) match the language used in the script.
+- Write every output value in English, regardless of the script's language. The downstream image generator + UI expects English prose.
 - Ensure the first and last frame descriptions are pure "snapshots," containing no ongoing actions (e.g., "He is about to stand up" is unacceptable; it should be "He is sitting on the chair, leaning slightly forward").
 - In the motion description, you must clearly distinguish between camera movement and on-screen movement. Use professional cinematic terminology (e.g., dolly shot, pan, zoom, etc.) as precisely as possible to describe camera movement.
 - In the motion description, you cannot directly use character names to refer to characters; instead, you should use the characters' visible characteristics to refer to them. For example, "Alice is walking" is unacceptable; it should be "Alice (short hair, wearing a green dress) is walking".

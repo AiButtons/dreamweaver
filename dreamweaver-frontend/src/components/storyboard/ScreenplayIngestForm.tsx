@@ -41,13 +41,19 @@ export function ScreenplayIngestForm({
   const [screenplay, setScreenplay] = useState("");
   const [style, setStyle] = useState(initialStyle ?? "Cinematic, natural lighting");
   const [userRequirement, setUserRequirement] = useState(initialUserRequirement ?? "");
-  const { state, start } = useIngestStream();
+  const { state, start, cancel } = useIngestStream();
   const [clientError, setClientError] = useState<string | null>(null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setClientError(null);
     const trimmed = screenplay.trim();
+    // Reject empty / all-whitespace payloads before the length check so
+    // the user gets an accurate message instead of "too short".
+    if (trimmed.length === 0) {
+      setClientError("Paste a screenplay before submitting.");
+      return;
+    }
     if (trimmed.length < 20) {
       setClientError("Screenplay is too short (20+ chars required).");
       return;
@@ -69,6 +75,10 @@ export function ScreenplayIngestForm({
     }
   };
 
+  // Only lock the form while the stream is actively running. After an
+  // error lands, state.kind flips to "error" and the user can edit +
+  // retry immediately. The ingest route already handles re-submission
+  // cleanly (each call opens a new storyboard row).
   const isBusy = state.kind === "running";
 
   return (
@@ -160,25 +170,37 @@ export function ScreenplayIngestForm({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">
           {isBusy
             ? "Streaming live progress from the ingestion pipeline."
             : "Ingestion runs one LLM pass per shot. Typical 1-page scene ≈ 30–90s."}
         </p>
-        <Button type="submit" disabled={isBusy} className="gap-2">
+        <div className="flex items-center gap-2">
           {isBusy ? (
-            <>
-              <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-              Ingesting…
-            </>
-          ) : (
-            <>
-              <FileText className="size-4" />
-              Ingest screenplay
-            </>
-          )}
-        </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => cancel()}
+              className="gap-1.5"
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button type="submit" disabled={isBusy} className="gap-2">
+            {isBusy ? (
+              <>
+                <span className="size-3.5 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                Ingesting…
+              </>
+            ) : (
+              <>
+                <FileText className="size-4" />
+                Ingest screenplay
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </form>
   );

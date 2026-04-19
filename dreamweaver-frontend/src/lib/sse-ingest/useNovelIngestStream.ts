@@ -32,6 +32,12 @@ export interface EpisodeRow {
 // redeclare here to avoid barrel-export ambiguity.
 import type { PortraitFailure } from "./useIngestStream";
 
+export interface EpisodeFailure {
+  episodeIndex: number;
+  title: string;
+  error: string;
+}
+
 export interface NovelDoneEvent {
   storyboardId: string;
   characterCount: number;
@@ -40,6 +46,9 @@ export interface NovelDoneEvent {
   portraitFailureCount?: number;
   portraitFailures?: PortraitFailure[];
   episodeCount: number;
+  /** How many episodes failed to write at all (shot graph never landed). */
+  episodesFailedCount?: number;
+  episodeFailures?: EpisodeFailure[];
   nodeCount: number;
   edgeCount: number;
   llmCallCount: number;

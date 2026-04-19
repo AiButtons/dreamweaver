@@ -120,7 +120,10 @@ export default function PropertiesPanel({
   isProcessing,
   onClose,
 }: PropertiesPanelProps) {
-  const [tab, setTab] = useState<"shot" | "media" | "delivery" | "review" | "continuity" | "advanced">("media");
+  // Default to the Shot tab — producers opening a freshly-ingested node
+  // reach for camera + character metadata before anything else. Media is
+  // a rarer entry point (producers who already have a prompt locked in).
+  const [tab, setTab] = useState<"shot" | "media" | "delivery" | "review" | "continuity" | "advanced">("shot");
   const tabTriggerClass =
     "border border-transparent text-muted-foreground data-[state=active]:border-primary/40 data-[state=active]:bg-primary/15 data-[state=active]:text-foreground";
 
