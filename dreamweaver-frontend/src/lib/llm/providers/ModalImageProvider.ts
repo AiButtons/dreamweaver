@@ -43,8 +43,12 @@ export class ModalImageProvider {
       prompt: finalPrompt,
       width,
       height,
-      // Default params
-      n_steps: 35,
+      // Default params. Note: the Modal backend caps `n_steps` at 20
+      // (FastAPI Pydantic validator `le=20`); values above this return
+      // HTTP 500 with a validation error, silently killing every portrait
+      // in the ingestion pipeline. Keep in sync with
+      // dreamweaver-backend/providers/modal/image.py.
+      n_steps: 20,
       guidance_scale: 8.0,
       model_id: modelOverride || "zennah-image-gen",
     };
@@ -62,7 +66,10 @@ export class ModalImageProvider {
         model_id: modelOverride || "zennah-qwen-edit",
         n: 1,
         extra_params: {
-             n_steps: 45, // Edit usually needs more steps
+             // Edit previously asked for 45 steps for sharper identity
+             // lock, but the Modal backend caps this at 20 for both
+             // paths — any higher value 500s. Keep at the ceiling.
+             n_steps: 20,
              guidance_scale: 6.0,
              // Explicitly skip lora_scale to use base Qwen Edit model as per requirements
         }

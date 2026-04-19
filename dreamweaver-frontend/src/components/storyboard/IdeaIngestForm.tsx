@@ -174,7 +174,7 @@ export function IdeaIngestForm({
         <p className="text-[11px] text-muted-foreground">
           {isBusy
             ? "Streaming live progress from the idea pipeline."
-            : "Idea → Story → Screenplay → Storyboard. Typical run ≈ 60–120s (two extra LLM passes before M1)."}
+            : "Idea → Story → Screenplay → Storyboard. Typical run 4–8 minutes (two extra LLM passes expand your one-liner into a full narrative before the M1 pipeline runs)."}
         </p>
         <Button type="submit" disabled={isBusy} className="gap-2">
           {isBusy ? (

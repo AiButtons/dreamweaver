@@ -37,11 +37,20 @@ import {
 } from "@/lib/ingest-postprocess";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+// 15 minutes — idea mode chains two extra LLM passes (develop_story +
+// write_script_based_on_story) before the M1 ingester runs, and GPT-5.4
+// `develop_story` can easily spend 2-3 minutes on a one-liner before
+// writing a 20k-char narrative. Screenplay mode finishes well inside this.
+export const maxDuration = 900;
 
 const PYTHON_BASE_URL =
   process.env.STORYBOARD_AGENT_BASE_URL || "http://localhost:8123";
-const INGEST_TIMEOUT_MS = 5 * 60 * 1000;
+// Matches maxDuration minus a small grace window so the abort fires before
+// the platform kills the request, and the client sees a clean error instead
+// of a half-flushed stream. Raised from 5min → 12min after a dogfooding run
+// where the idea flow consistently hit the old ceiling during storyboard-
+// design on a single-scene idea.
+const INGEST_TIMEOUT_MS = 12 * 60 * 1000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 
 type IngestMode = "screenplay" | "idea";
