@@ -29,6 +29,7 @@ import { ExportMenu } from "@/components/storyboard/ExportMenu";
 import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
 import { GenerateAllVideosButton } from "@/components/storyboard/GenerateAllVideosButton";
 import { GenerateAllAudiosButton } from "@/components/storyboard/GenerateAllAudiosButton";
+import { ReelPlayer } from "@/components/storyboard/ReelPlayer";
 import { CameoUploadDialog } from "@/components/storyboard/CameoUploadDialog";
 import {
   SHOT_BATCH_TRIGGER_EVENT,
@@ -43,7 +44,7 @@ import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { createDefaultStoryNodeData } from "@/app/storyboard/defaults";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
+import { Film, PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
 
 import {
   StoryNode,
@@ -264,6 +265,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   const activeStoryboardId = storyboardIdOverride ?? params?.storyboardId ?? null;
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [cameoDialogOpen, setCameoDialogOpen] = useState(false);
+  const [reelOpen, setReelOpen] = useState(false);
 
   // Loose end #2 — cross-storyboard batch trigger. The bridge may navigate
   // here from a different storyboard's approval card with query params
@@ -2173,6 +2175,19 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               storyboardId={activeStoryboardId ?? ""}
               disabled={!activeStoryboardId || !snapshot}
             />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-[11px]"
+              onClick={() => setReelOpen(true)}
+              disabled={!activeStoryboardId || !snapshot}
+              aria-label="Watch reel preview"
+              title="Sequential preview of every shot (video + narration) in order"
+            >
+              <Film className="h-3.5 w-3.5" aria-hidden="true" />
+              Watch reel
+            </Button>
             <ExportMenu
               storyboardId={activeStoryboardId ?? ""}
               storyboardTitle={snapshot?.storyboard?.title ?? "Untitled"}
@@ -2294,6 +2309,13 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               notes: `AutoCameo · ${payload.attributionText}`,
             });
           }}
+        />
+      ) : null}
+      {activeStoryboardId ? (
+        <ReelPlayer
+          open={reelOpen}
+          onOpenChange={setReelOpen}
+          storyboardId={activeStoryboardId}
         />
       ) : null}
     </div>
