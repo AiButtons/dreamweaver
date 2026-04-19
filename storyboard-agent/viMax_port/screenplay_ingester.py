@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any, Awaitable, Callable, Optional
 
 from .character_extractor import CharacterExtractor
 from .character_portraits_generator import (
@@ -33,6 +34,28 @@ from .storyboard_artist import StoryboardArtist
 from .types import IngestionResult
 
 
+# (stage, percent_complete, status_message, extra_fields) contract. The
+# coordinator fires events at each pipeline stage boundary so a streaming
+# endpoint can forward them to the client as SSE. Non-streaming callers
+# simply pass `None` (the default) and the events no-op.
+EventEmitter = Callable[[str, float, str, dict[str, Any]], Awaitable[None]]
+
+
+async def _emit(
+    emitter: Optional[EventEmitter],
+    stage: str,
+    percent: float,
+    message: str,
+    **extra: Any,
+) -> None:
+    if emitter is None:
+        return
+    try:
+        await emitter(stage, percent, message, extra)
+    except Exception:  # never let telemetry break the pipeline
+        pass
+
+
 async def ingest_screenplay(
     *,
     storyboard_id: str,
@@ -43,11 +66,13 @@ async def ingest_screenplay(
     # generation that may need to hit the media proxy directly from Python).
     media_base_url: str = "",  # noqa: ARG001
     auth_token: str = "",  # noqa: ARG001
+    event_emitter: Optional[EventEmitter] = None,
 ) -> IngestionResult:
     started = time.time()
     llm_calls = 0
 
     chat_model = make_chat_model()
+    await _emit(event_emitter, "preprocessing", 2.0, "Analyzing screenplay format")
 
     # Stage 1: preprocessor (conditional)
     prose_script, did_preprocess = await maybe_preprocess_screenplay(
@@ -55,11 +80,27 @@ async def ingest_screenplay(
     )
     if did_preprocess:
         llm_calls += 1
+    await _emit(
+        event_emitter,
+        "extracting_characters",
+        15.0,
+        "Extracting characters"
+        if did_preprocess
+        else "Extracting characters (no preprocess needed)",
+    )
 
     # Stage 2: extract characters
     extractor = CharacterExtractor(chat_model=chat_model)
     characters = await extractor.extract_characters(script=prose_script)
     llm_calls += 1
+    visible_count = sum(1 for c in characters if c.is_visible)
+    await _emit(
+        event_emitter,
+        "designing_storyboard",
+        30.0,
+        f"Found {len(characters)} character{'s' if len(characters) != 1 else ''} ({visible_count} visible)",
+        characterCount=len(characters),
+    )
 
     # Stage 3: build the 3-view portrait prompt set per visible character
     # (prompt-only — the Next.js route fulfills them). Order matters: fronts
@@ -106,6 +147,13 @@ async def ingest_screenplay(
         user_requirement=user_requirement,
     )
     llm_calls += 1
+    await _emit(
+        event_emitter,
+        "decomposing_shots",
+        45.0,
+        f"Designed {len(briefs)} shot{'s' if len(briefs) != 1 else ''} — decomposing each",
+        shotCount=len(briefs),
+    )
 
     # Stage 5: decompose each shot (bounded parallelism)
     decomp_tasks = [
@@ -117,6 +165,13 @@ async def ingest_screenplay(
     decompositions = await asyncio.gather(*decomp_tasks, return_exceptions=True)
     decomposed = [d for d in decompositions if not isinstance(d, Exception)]
     llm_calls += len(briefs)
+    await _emit(
+        event_emitter,
+        "writing_to_convex",
+        65.0,
+        f"Decomposed {len(decomposed)}/{len(briefs)} shots — assembling payload",
+        shotCount=len(briefs),
+    )
 
     # Stage 6: map to Dreamweaver payloads
     char_lookup = {c.idx: c.identifier_in_scene for c in characters}

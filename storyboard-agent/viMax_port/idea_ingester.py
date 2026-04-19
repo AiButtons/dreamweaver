@@ -14,10 +14,10 @@ isolated snippets) and the resulting storyboard reads as one linear arc.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from .llm_factory import make_chat_model
-from .screenplay_ingester import ingest_screenplay
+from .screenplay_ingester import EventEmitter, _emit, ingest_screenplay
 from .screenwriter import Screenwriter
 from .types import IngestionResult
 
@@ -47,6 +47,7 @@ async def ingest_idea(
     user_requirement: str,
     media_base_url: str = "",
     auth_token: str = "",
+    event_emitter: Optional[EventEmitter] = None,
 ) -> IngestionResult:
     """Pipeline:
       1) develop_story(idea, user_requirement) → narrative prose
@@ -57,19 +58,34 @@ async def ingest_idea(
          3-view portrait prompts → mapper.
 
     Adds 2 LLM calls on top of M1's baseline (develop_story + write_script).
+    Emits `developing_story` + `writing_script` events before delegating, so
+    clients see these stages *before* the downstream screenplay events fire.
     """
     chat_model = make_chat_model()
     writer = Screenwriter(chat_model=chat_model)
 
+    await _emit(event_emitter, "developing_story", 1.0, "Developing a narrative from the idea")
     story = await writer.develop_story(
         idea=idea,
         user_requirement=user_requirement or None,
+    )
+    await _emit(
+        event_emitter,
+        "writing_script",
+        8.0,
+        f"Story ready ({len(story)} chars) — splitting into scenes",
     )
     scenes = await writer.write_script_based_on_story(
         story=story,
         user_requirement=user_requirement or None,
     )
     screenplay = _join_scenes(scenes)
+    await _emit(
+        event_emitter,
+        "preprocessing",
+        14.0,
+        f"Wrote {len(scenes)} scene{'s' if len(scenes) != 1 else ''} — handing off to screenplay ingestion",
+    )
 
     # Downstream ingester produces the IngestionResult. It will run its own
     # preprocessor (screenplay_preprocessor) against the joined document —
@@ -82,6 +98,7 @@ async def ingest_idea(
         user_requirement=user_requirement,
         media_base_url=media_base_url,
         auth_token=auth_token,
+        event_emitter=event_emitter,
     )
     # Bump the LLM call count to reflect the two extra Screenwriter calls
     # we made here; keep the downstream pipelineDurationMs as reported
