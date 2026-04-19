@@ -45,10 +45,20 @@ const INITIAL_STATE: ShotBatchState = {
   elapsedMs: 0,
 };
 
+/** Which media surface the batch should target. Image renders shot
+ *  stills via LTX-2.3/Zennah (fast path); video renders per-shot I2V
+ *  clips via LTX-2.3 with the shot's existing image as keyframe 0. */
+export type ShotBatchMode = "image" | "video";
+
 export interface StartShotBatchInput {
   storyboardId: string;
   skipExisting?: boolean;
   concurrency?: number;
+  /** Defaults to "image" for backwards compatibility with callers that
+   *  predate M4. Pass "video" to target the video batch route. */
+  mode?: ShotBatchMode;
+  /** Optional model override, only consumed in `mode: "video"`. */
+  videoModelId?: string;
 }
 
 /** Client hook for /api/storyboard/generate-shots-stream. Tracks per-shot
@@ -89,10 +99,23 @@ export function useShotBatchStream() {
       abortRef.current = controller;
 
       try {
-        const response = await fetch("/api/storyboard/generate-shots-stream", {
+        const mode: ShotBatchMode = input.mode ?? "image";
+        const endpoint =
+          mode === "video"
+            ? "/api/storyboard/generate-shot-videos-stream"
+            : "/api/storyboard/generate-shots-stream";
+        // Strip `mode` from the body — the endpoint itself encodes the
+        // media kind, and the video route doesn't accept an arbitrary
+        // `mode` field. Keep videoModelId when it's meaningful.
+        const { mode: _dropMode, ...rest } = input;
+        const body =
+          mode === "video"
+            ? rest
+            : { ...rest, videoModelId: undefined };
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {

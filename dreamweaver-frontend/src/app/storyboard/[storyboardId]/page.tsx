@@ -27,6 +27,7 @@ import { OutlinePanel } from "@/components/storyboard/OutlinePanel";
 import { ProductionHubDrawer } from "@/components/storyboard/ProductionHubDrawer";
 import { ExportMenu } from "@/components/storyboard/ExportMenu";
 import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
+import { GenerateAllVideosButton } from "@/components/storyboard/GenerateAllVideosButton";
 import { CameoUploadDialog } from "@/components/storyboard/CameoUploadDialog";
 import {
   SHOT_BATCH_TRIGGER_EVENT,
@@ -2160,6 +2161,10 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               Cameo
             </Button>
             <GenerateAllShotsButton
+              storyboardId={activeStoryboardId ?? ""}
+              disabled={!activeStoryboardId || !snapshot}
+            />
+            <GenerateAllVideosButton
               storyboardId={activeStoryboardId ?? ""}
               disabled={!activeStoryboardId || !snapshot}
             />
