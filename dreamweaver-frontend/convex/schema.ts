@@ -943,4 +943,25 @@ export default defineSchema({
   })
     .index("by_owner_createdAt", ["ownerUserId", "createdAt"])
     .index("by_owner_draft", ["ownerUserId", "draftId"]),
+
+  // M5 #6 — persisted record of every reel export. Separate from
+  // mediaAssets (which is node-scoped via a required nodeId) so the
+  // storyboard-level reel doesn't need a synthetic node. Each row
+  // carries enough metadata to re-play or re-download without
+  // rebuilding the manifest.
+  reelExports: defineTable({
+    storyboardId: v.id("storyboards"),
+    userId: v.string(),
+    storageId: v.id("_storage"),
+    sourceUrl: v.string(),
+    shotCount: v.number(),
+    totalDurationS: v.number(),
+    byteLength: v.number(),
+    // Snapshot of the manifest title at export time — useful when the
+    // producer renames the storyboard later.
+    title: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_storyboard_createdAt", ["storyboardId", "createdAt"])
+    .index("by_user_createdAt", ["userId", "createdAt"]),
 });

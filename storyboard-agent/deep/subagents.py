@@ -20,6 +20,7 @@ from .tools import (
     producer_guard,
     recommend_ingestion_path,
     repair_plan,
+    request_export_reel,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
     request_generate_shot_audio_batch,
@@ -124,18 +125,21 @@ def get_subagents(
         },
         {
             "name": "ingestion_coordinator",
-            "description": "Routes producer intent to the right ingestion surface (screenplay/idea/novel) and proposes shot-batch runs for images, videos, and narration audio.",
+            "description": "Routes producer intent to the right ingestion surface (screenplay/idea/novel) and proposes shot-batch runs for images, videos, narration audio, and final mp4 export.",
             "system_prompt": (
                 "You are the Ingestion Coordinator. Classify producer intent using "
                 "recommend_ingestion_path, then request_ingestion_run to open the "
                 "right library-page dialog pre-populated with hints. Once a storyboard "
-                "exists, you may propose three batch runs in this order of dependency: "
+                "exists, you may propose these batch runs in dependency order: "
                 "(1) request_generate_shot_batch renders all shot images, "
                 "(2) request_generate_shot_video_batch animates those images into I2V "
-                "clips (depends on (1)), and (3) request_generate_shot_audio_batch "
-                "generates OpenAI TTS narration for every shot (independent of (1) and "
-                "(2) — can run in parallel). Never trigger any batch silently; always "
-                "gate through the HITL tools."
+                "clips (depends on (1)), (3) request_generate_shot_audio_batch "
+                "generates OpenAI TTS narration (independent of (1) and (2) — can run "
+                "in parallel), and (4) request_export_reel runs the server-side ffmpeg "
+                "pipeline to concat every rendered shot into a single mp4 (depends on "
+                "at least some combination of (1)-(3) — a reel of silent black frames "
+                "is technically valid but useless). Never trigger any batch or export "
+                "silently; always gate through the HITL tools."
             ),
             "tools": [
                 recommend_ingestion_path,
@@ -143,6 +147,7 @@ def get_subagents(
                 request_generate_shot_batch,
                 request_generate_shot_video_batch,
                 request_generate_shot_audio_batch,
+                request_export_reel,
             ],
         },
         {

@@ -175,6 +175,13 @@ export type GenerateShotAudioBatchInput = {
   speed: number;
 };
 
+export type ExportReelInput = {
+  storyboardId: string;
+  rationale: string;
+  shotCount: number;
+  estimatedDurationS: number;
+};
+
 /**
  * CustomEvent name the bridge dispatches to kick off the batch button. The
  * `GenerateAllShotsButton` listens for this on `window` so the agent doesn't
@@ -424,6 +431,26 @@ const parseGenerateShotAudioBatchInput = (
     model,
     speed,
   };
+};
+
+const parseExportReelInput = (value: unknown): ExportReelInput | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const storyboardId =
+    typeof value.storyboardId === "string" ? value.storyboardId : "";
+  const rationale = typeof value.rationale === "string" ? value.rationale : "";
+  const shotCount =
+    typeof value.shotCount === "number" && Number.isFinite(value.shotCount)
+      ? Math.max(0, Math.floor(value.shotCount))
+      : 0;
+  const estimatedDurationS =
+    typeof value.estimatedDurationS === "number" &&
+    Number.isFinite(value.estimatedDurationS)
+      ? Math.max(0, value.estimatedDurationS)
+      : 0;
+  if (!storyboardId) return null;
+  return { storyboardId, rationale, shotCount, estimatedDurationS };
 };
 
 const capitalize = (s: string): string => (s.length === 0 ? s : s[0].toUpperCase() + s.slice(1));
@@ -2487,6 +2514,124 @@ export function StoryboardCopilotBridge({
     },
   });
 
+  useHumanInTheLoop({
+    name: "request_export_reel",
+    description:
+      "Approve/reject running the server-side ffmpeg pipeline to export this storyboard's reel as a single mp4 file.",
+    parameters: [
+      { name: "storyboardId", type: "string", description: "Storyboard id", required: true },
+      { name: "rationale", type: "string", description: "Why export now", required: true },
+      { name: "shotCount", type: "number", description: "Total shot count (diagnostic)", required: false },
+      { name: "estimatedDurationS", type: "number", description: "Expected reel duration (diagnostic)", required: false },
+    ],
+    render: ({ args, status, respond }) => {
+      if (status !== "executing" || !respond) {
+        return <></>;
+      }
+      const input = parseExportReelInput(args);
+      if (!input) {
+        return (
+          <ToolStatusCard
+            name="request_export_reel"
+            status="failed"
+            args={JSON.stringify(args ?? {}, null, 2)}
+            result={JSON.stringify({ error: "Invalid export-reel payload" })}
+          />
+        );
+      }
+      const isOnTargetStoryboard =
+        Boolean(storyboardId) && storyboardId === input.storyboardId;
+      const durationLabel =
+        input.estimatedDurationS > 0
+          ? `${input.estimatedDurationS.toFixed(1)}s`
+          : "—";
+      const subtitle = `${input.shotCount} shot${input.shotCount === 1 ? "" : "s"} · ~${durationLabel} · ffmpeg on server${isOnTargetStoryboard ? "" : " · will navigate"}`;
+
+      const runExport = async (): Promise<{
+        url?: string;
+        error?: string;
+      }> => {
+        const res = await fetch("/api/storyboard/export-reel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storyboardId: input.storyboardId }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          return { error: err.error ?? `Export failed (${res.status})` };
+        }
+        const data = (await res.json()) as { url?: string };
+        return { url: data.url };
+      };
+
+      return (
+        <ApprovalCard
+          title="Export reel as mp4"
+          subtitle={subtitle}
+          body={
+            input.rationale ||
+            "Normalize every rendered shot and concat into a single mp4."
+          }
+          onApprove={async () => {
+            if (!isOnTargetStoryboard) {
+              router.push(`/storyboard/${encodeURIComponent(input.storyboardId)}`);
+            }
+            const outcome = await runExport();
+            await auditToolCall({
+              tool: "request_export_reel",
+              result: outcome.error ? "blocked" : "success",
+              details: {
+                storyboardId: input.storyboardId,
+                shotCount: input.shotCount,
+                error: outcome.error,
+                navigated: !isOnTargetStoryboard,
+              },
+            });
+            if (outcome.error) {
+              respond({ approved: false, blockedReason: outcome.error });
+            } else {
+              respond({ approved: true, mp4Url: outcome.url });
+            }
+          }}
+          onEdit={async () => {
+            // Export has no edit semantics — treat Edit the same as Approve.
+            if (!isOnTargetStoryboard) {
+              router.push(`/storyboard/${encodeURIComponent(input.storyboardId)}`);
+            }
+            const outcome = await runExport();
+            await auditToolCall({
+              tool: "request_export_reel",
+              result: outcome.error ? "blocked" : "success",
+              details: {
+                storyboardId: input.storyboardId,
+                error: outcome.error,
+                edited: true,
+              },
+            });
+            if (outcome.error) {
+              respond({ approved: false, blockedReason: outcome.error });
+            } else {
+              respond({ approved: true, edited: true, mp4Url: outcome.url });
+            }
+          }}
+          onReject={async () => {
+            await auditToolCall({
+              tool: "request_export_reel",
+              result: "blocked",
+              details: { storyboardId: input.storyboardId },
+            });
+            respond({
+              approved: false,
+              blockedReason: "Producer rejected reel export.",
+            });
+          }}
+        />
+      );
+    },
+  });
+
   return (
     <>
       <CopilotActionRegistration name="propose_branch" />
@@ -2513,6 +2658,7 @@ export function StoryboardCopilotBridge({
       <CopilotActionRegistration name="request_generate_shot_batch" />
       <CopilotActionRegistration name="request_generate_shot_video_batch" />
       <CopilotActionRegistration name="request_generate_shot_audio_batch" />
+      <CopilotActionRegistration name="request_export_reel" />
       <CopilotSidebar
         defaultOpen={false}
         clickOutsideToClose

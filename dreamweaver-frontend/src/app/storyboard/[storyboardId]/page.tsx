@@ -29,6 +29,7 @@ import { ExportMenu } from "@/components/storyboard/ExportMenu";
 import { GenerateAllShotsButton } from "@/components/storyboard/GenerateAllShotsButton";
 import { GenerateAllVideosButton } from "@/components/storyboard/GenerateAllVideosButton";
 import { GenerateAllAudiosButton } from "@/components/storyboard/GenerateAllAudiosButton";
+import { RegenerateFlaggedButton } from "@/components/storyboard/RegenerateFlaggedButton";
 import { ReelPlayer } from "@/components/storyboard/ReelPlayer";
 import { CameoUploadDialog } from "@/components/storyboard/CameoUploadDialog";
 import {
@@ -2195,6 +2196,10 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               Cameo
             </Button>
             <GenerateAllShotsButton
+              storyboardId={activeStoryboardId ?? ""}
+              disabled={!activeStoryboardId || !snapshot}
+            />
+            <RegenerateFlaggedButton
               storyboardId={activeStoryboardId ?? ""}
               disabled={!activeStoryboardId || !snapshot}
             />

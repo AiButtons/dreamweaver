@@ -19,6 +19,7 @@ from deep.tools import (
     filter_tools_by_allowlist,
     is_tool_allowed,
     recommend_ingestion_path,
+    request_export_reel,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
     request_generate_shot_audio_batch,
@@ -308,6 +309,46 @@ class RequestGenerateShotAudioBatchTests(unittest.TestCase):
         self.assertEqual(payload["input"]["concurrency"], 5)
 
 
+class RequestExportReelTests(unittest.TestCase):
+    def test_shape_is_waiting_for_human(self) -> None:
+        payload = request_export_reel.invoke(
+            {
+                "storyboard_id": "sb_42",
+                "rationale": "Producer asked to export the final cut.",
+                "shot_count": 12,
+                "estimated_duration_s": 60.5,
+            }
+        )
+        self.assertEqual(payload["status"], "waiting_for_human")
+        self.assertEqual(payload["action"], "request_export_reel")
+        self.assertEqual(payload["input"]["storyboardId"], "sb_42")
+        self.assertEqual(payload["input"]["shotCount"], 12)
+        self.assertEqual(payload["input"]["estimatedDurationS"], 60.5)
+
+    def test_negative_counts_become_zero(self) -> None:
+        payload = request_export_reel.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "rationale": "",
+                "shot_count": -5,
+                "estimated_duration_s": -10.0,
+            }
+        )
+        self.assertEqual(payload["input"]["shotCount"], 0)
+        self.assertEqual(payload["input"]["estimatedDurationS"], 0.0)
+
+    def test_rationale_truncated(self) -> None:
+        long_rationale = "word " * 400  # ~2000 chars
+        payload = request_export_reel.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "rationale": long_rationale,
+            }
+        )
+        # Truncation is a defensive cap; exact boundary is 1200 chars.
+        self.assertLessEqual(len(payload["input"]["rationale"]), 1200)
+
+
 class PolicyAndRegistryTests(unittest.TestCase):
     def test_policy_tokens_registered(self) -> None:
         self.assertEqual(
@@ -327,12 +368,17 @@ class PolicyAndRegistryTests(unittest.TestCase):
             TOOL_POLICY_TOKENS[request_generate_shot_audio_batch.name],
             "shot_audio_batch.run",
         )
+        self.assertEqual(
+            TOOL_POLICY_TOKENS[request_export_reel.name],
+            "reel_export.run",
+        )
 
     def test_default_allowlist_includes_new_tokens(self) -> None:
         self.assertIn("ingestion.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_video_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_audio_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
+        self.assertIn("reel_export.run", DEFAULT_RUNTIME_ALLOWLIST)
 
     def test_is_tool_allowed_under_default_policy(self) -> None:
         # Passing empty allowlist should trigger default policy.
@@ -340,6 +386,7 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertTrue(is_tool_allowed([], "shot_batch.run"))
         self.assertTrue(is_tool_allowed([], "shot_video_batch.run"))
         self.assertTrue(is_tool_allowed([], "shot_audio_batch.run"))
+        self.assertTrue(is_tool_allowed([], "reel_export.run"))
         # But team.manage is still gated behind explicit opt-in.
         self.assertFalse(is_tool_allowed([], "team.manage"))
 
@@ -350,6 +397,7 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertIn(request_generate_shot_batch.name, supervisor_names)
         self.assertIn(request_generate_shot_video_batch.name, supervisor_names)
         self.assertIn(request_generate_shot_audio_batch.name, supervisor_names)
+        self.assertIn(request_export_reel.name, supervisor_names)
 
     def test_new_tools_present_in_all_tools(self) -> None:
         all_names = {getattr(t, "name", "") for t in ALL_TOOLS}
@@ -358,6 +406,7 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertIn(request_generate_shot_batch.name, all_names)
         self.assertIn(request_generate_shot_video_batch.name, all_names)
         self.assertIn(request_generate_shot_audio_batch.name, all_names)
+        self.assertIn(request_export_reel.name, all_names)
 
     def test_video_batch_policy_gate_independent_of_image_batch(self) -> None:
         # A strict allowlist that only enables image batch must not leak

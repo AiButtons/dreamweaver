@@ -67,6 +67,12 @@ export interface StartShotBatchInput {
   model?: string;
   /** TTS speed override, only consumed in `mode: "audio"`. */
   speed?: number;
+  /** Only consumed in `mode: "image"` — re-render only shots whose
+   *  active image is flagged NG (dailies review loop). */
+  flaggedOnly?: boolean;
+  /** Only consumed in `mode: "image"` — explicit shot allowlist. Takes
+   *  precedence over `flaggedOnly` when both are set. */
+  nodeIds?: string[];
 }
 
 /** Client hook for /api/storyboard/generate-shots-stream. Tracks per-shot
@@ -139,6 +145,8 @@ export function useShotBatchStream() {
                   storyboardId: rest.storyboardId,
                   skipExisting: rest.skipExisting,
                   concurrency: rest.concurrency,
+                  flaggedOnly: rest.flaggedOnly,
+                  nodeIds: rest.nodeIds,
                 };
         const response = await fetch(endpoint, {
           method: "POST",

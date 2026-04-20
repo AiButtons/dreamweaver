@@ -42,6 +42,15 @@ interface GenerateShotsBody {
   storyboardId?: string;
   skipExisting?: boolean;
   concurrency?: number;
+  /** M5 dailies review: when true, skip the normal skipExisting check
+   *  AND restrict the batch to shots whose active image is flagged NG.
+   *  Used by the Regenerate-flagged button. Shots with no NG flag are
+   *  emitted as `shot_skipped` with reason "not flagged". */
+  flaggedOnly?: boolean;
+  /** Explicit allowlist — when set, process ONLY these nodeIds. Takes
+   *  precedence over flaggedOnly. Useful for targeted re-renders driven
+   *  from the agent or a future "re-render this shot" button. */
+  nodeIds?: string[];
 }
 
 interface SnapshotNode {
@@ -89,11 +98,25 @@ const buildPortraitsByCharacter = (
   return map;
 };
 
-const deriveShotPrompt = (node: SnapshotNode): string | null => {
-  const pack = node.promptPack?.imagePrompt?.trim();
-  if (pack) return pack;
-  const seg = (node.segment ?? "").trim();
-  return seg.length > 0 ? seg : null;
+/**
+ * Build the final image-generation prompt for a shot.
+ *
+ * Core prompt: `promptPack.imagePrompt` (producer-overridable via the
+ * Media tab) falls back to `segment` (the shot's visual_desc from the
+ * LLM ingester).
+ *
+ * M5 scaffolding for multi-character composed shots: when
+ * `shotMeta.blockingNotes` is set, append it as an explicit
+ * "COMPOSITION:" suffix. Producers now have a dedicated lever for
+ * staging 3+ characters without having to edit the full prompt.
+ * Safe when the field is blank (no change to existing behavior).
+ */
+export const deriveShotPrompt = (node: SnapshotNode): string | null => {
+  const core = node.promptPack?.imagePrompt?.trim() || node.segment?.trim();
+  if (!core) return null;
+  const blocking = node.shotMeta?.blockingNotes?.trim();
+  if (!blocking) return core;
+  return `${core}\n\nCOMPOSITION: ${blocking}`;
 };
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -123,6 +146,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   const skipExisting = body.skipExisting !== false;
   const concurrency = Math.min(Math.max(1, body.concurrency ?? DEFAULT_CONCURRENCY), 6);
+  const flaggedOnly = body.flaggedOnly === true;
+  const explicitNodeIds =
+    Array.isArray(body.nodeIds) && body.nodeIds.length > 0
+      ? new Set(body.nodeIds.filter((id) => typeof id === "string"))
+      : null;
 
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
@@ -165,25 +193,42 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       try {
         // Fetch snapshot + portraits in parallel.
-        const [snapshot, portraitResponse] = await Promise.all([
+        // In flaggedOnly mode we also pre-fetch the list of flagged
+        // nodeIds so the worker can skip everything else without reading
+        // each mediaAsset individually.
+        const [snapshot, portraitResponse, flaggedResponse] = await Promise.all([
           client.query(queryRef("storyboards:getStoryboardSnapshot"), {
             storyboardId,
           }) as Promise<StoryboardSnapshot | null>,
           client.query(queryRef("identityReferences:listPortraitsForStoryboard"), {
             storyboardId,
           }) as Promise<PortraitGroupsResponse | null>,
+          flaggedOnly
+            ? (client.query(queryRef("mediaAssets:listShotsWithFlaggedMedia"), {
+                storyboardId,
+              }) as Promise<{ flaggedNodeIds?: string[] } | null>)
+            : Promise.resolve(null),
         ]);
         if (!snapshot || !snapshot.storyboard) {
           send("error", { message: "Storyboard not found" });
           return;
         }
+        const flaggedSet = flaggedOnly
+          ? new Set(flaggedResponse?.flaggedNodeIds ?? [])
+          : null;
 
         const shots = snapshot.nodes.filter((n) => n.nodeType === "shot");
         const portraitsByCharacter = buildPortraitsByCharacter(
           portraitResponse?.groups ?? {},
         );
         const total = shots.length;
-        send("open", { total, concurrency });
+        send("open", {
+          total,
+          concurrency,
+          flaggedOnly,
+          flaggedCount: flaggedSet?.size ?? null,
+          explicitNodeIdCount: explicitNodeIds?.size ?? null,
+        });
 
         const counts = { succeeded: 0, failed: 0, skipped: 0 };
 
@@ -198,7 +243,37 @@ export async function POST(request: NextRequest): Promise<Response> {
             const shot = shots[index];
             const nodeId = shot.nodeId;
 
-            if (skipExisting && shot.media?.activeImageId) {
+            // Allowlist filters take precedence. `explicitNodeIds`
+            // (caller-supplied) beats `flaggedOnly` (derived from
+            // Convex) — matches the expected "agent targeted this
+            // specific shot" semantics.
+            if (explicitNodeIds && !explicitNodeIds.has(nodeId)) {
+              counts.skipped += 1;
+              send("shot_skipped", {
+                nodeId,
+                index,
+                reason: "not in requested nodeIds",
+              });
+              continue;
+            }
+            if (!explicitNodeIds && flaggedSet && !flaggedSet.has(nodeId)) {
+              counts.skipped += 1;
+              send("shot_skipped", {
+                nodeId,
+                index,
+                reason: "not flagged",
+              });
+              continue;
+            }
+
+            // When we're targeting specific shots (flaggedOnly or
+            // explicitNodeIds), the producer's intent is to re-render
+            // regardless of whether a previous image exists. Skip the
+            // skipExisting gate in those modes.
+            const honorSkipExisting =
+              skipExisting && !flaggedOnly && !explicitNodeIds;
+
+            if (honorSkipExisting && shot.media?.activeImageId) {
               counts.skipped += 1;
               send("shot_skipped", {
                 nodeId,

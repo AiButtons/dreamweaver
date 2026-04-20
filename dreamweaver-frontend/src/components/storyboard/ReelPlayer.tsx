@@ -18,6 +18,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { mutationRef } from "@/lib/convexRefs";
 import {
   Dialog,
   DialogContent,
@@ -26,8 +28,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, Download, Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { AlertTriangle, Download, History, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import type { ReelManifest, ReelShot } from "@/app/api/storyboard/reel-manifest/route";
+import { queryRef } from "@/lib/convexRefs";
+
+interface ReelExportRow {
+  _id: string;
+  storageId: string;
+  sourceUrl: string;
+  shotCount: number;
+  totalDurationS: number;
+  byteLength: number;
+  title: string;
+  createdAt: number;
+}
 
 export interface ReelPlayerProps {
   open: boolean;
@@ -46,6 +60,27 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportedUrl, setExportedUrl] = useState<string | null>(null);
+  // When the server export returns 501 (ffmpeg not installed), we offer
+  // a client-side fallback via ffmpeg.wasm. Label reflects which path
+  // is currently running so the producer knows the wasm download is
+  // happening (and why the first export after a page load is slower).
+  const [exportStageLabel, setExportStageLabel] = useState<string | null>(null);
+
+  const generateUploadUrlMut = useMutation(
+    mutationRef("storage:generateCameoUploadUrl"),
+  );
+  const getStorageUrlMut = useMutation(mutationRef("storage:getStorageUrl"));
+  const recordReelExportMut = useMutation(
+    mutationRef("reelExports:recordReelExport"),
+  );
+  // Past reel exports for this storyboard (newest first). Reactive — if
+  // a second device / tab exports in parallel it shows up here too.
+  const pastExports = useQuery(
+    queryRef("reelExports:listReelExportsForStoryboard"),
+    open && storyboardId
+      ? { storyboardId: storyboardId as never, limit: 10 }
+      : "skip",
+  ) as ReelExportRow[] | undefined;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,6 +96,7 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
       setExporting(false);
       setExportError(null);
       setExportedUrl(null);
+      setExportStageLabel(null);
       return;
     }
     let cancelled = false;
@@ -347,11 +383,12 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
                     </a>
                   </span>
                 ) : exporting ? (
-                  <span>Encoding reel… (ffmpeg can take 1-2s per shot)</span>
+                  <span>{exportStageLabel ?? "Encoding reel…"}</span>
                 ) : (
                   <span>
-                    Export concatenates every shot into a single mp4 via
-                    ffmpeg on the server.
+                    Export concatenates every shot into a single mp4.
+                    Uses server ffmpeg when available, ffmpeg.wasm
+                    otherwise.
                   </span>
                 )}
               </div>
@@ -365,16 +402,23 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
                   setExporting(true);
                   setExportError(null);
                   setExportedUrl(null);
+                  setExportStageLabel("Trying server ffmpeg…");
                   try {
-                    const res = await fetch(
-                      "/api/storyboard/export-reel",
-                      {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ storyboardId }),
-                      },
-                    );
-                    if (!res.ok) {
+                    // 1. Try server-side route first (fast, no client CPU).
+                    const res = await fetch("/api/storyboard/export-reel", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ storyboardId }),
+                    });
+                    if (res.ok) {
+                      const data = (await res.json()) as { url: string };
+                      setExportedUrl(data.url);
+                      setExportStageLabel(null);
+                      return;
+                    }
+                    // 2. 501 → fall back to client-side ffmpeg.wasm.
+                    //    Any other status is a real error.
+                    if (res.status !== 501) {
                       const errData = (await res.json().catch(() => ({}))) as {
                         error?: string;
                       };
@@ -382,12 +426,84 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
                         errData.error ?? `Export failed (${res.status})`,
                       );
                     }
-                    const data = (await res.json()) as { url: string };
-                    setExportedUrl(data.url);
+                    if (!manifest) throw new Error("Manifest not loaded");
+                    setExportStageLabel(
+                      "Server has no ffmpeg — loading wasm (~30MB)…",
+                    );
+                    const { exportReelClientSide } = await import(
+                      "@/lib/reel-export/client"
+                    );
+                    const result = await exportReelClientSide({
+                      manifest,
+                      onProgress: (p) => {
+                        if (p.stage === "loading_wasm") {
+                          setExportStageLabel("Loading ffmpeg.wasm…");
+                        } else if (p.stage === "downloading") {
+                          setExportStageLabel(
+                            `Downloading shot ${(p.shotIndex ?? 0) + 1} / ${p.shotTotal ?? 0}`,
+                          );
+                        } else if (p.stage === "normalizing") {
+                          setExportStageLabel(
+                            `Encoding shot ${(p.shotIndex ?? 0) + 1} / ${p.shotTotal ?? 0}`,
+                          );
+                        } else if (p.stage === "concatenating") {
+                          setExportStageLabel("Concatenating reel…");
+                        }
+                      },
+                    });
+                    // Upload the wasm-produced mp4 to Convex storage the
+                    // same way the server route does.
+                    setExportStageLabel("Uploading to Convex storage…");
+                    const uploadUrl = (await generateUploadUrlMut(
+                      {},
+                    )) as string;
+                    // Copy the wasm-returned Uint8Array into a fresh
+                    // ArrayBuffer so `Blob`'s strict BufferSource type
+                    // is happy even when the original buffer is
+                    // SharedArrayBuffer-backed.
+                    const reelBuffer = new ArrayBuffer(result.bytes.byteLength);
+                    new Uint8Array(reelBuffer).set(result.bytes);
+                    const uploadRes = await fetch(uploadUrl, {
+                      method: "POST",
+                      headers: { "Content-Type": "video/mp4" },
+                      body: new Blob([reelBuffer], { type: "video/mp4" }),
+                    });
+                    if (!uploadRes.ok) {
+                      const text = await uploadRes.text().catch(() => "");
+                      throw new Error(
+                        `storage upload ${uploadRes.status}: ${text.slice(0, 200)}`,
+                      );
+                    }
+                    const { storageId } = (await uploadRes.json()) as {
+                      storageId: string;
+                    };
+                    const publicUrl = (await getStorageUrlMut({
+                      storageId: storageId as never,
+                    })) as string;
+                    // Record the client-side export in the same table the
+                    // server writes to so past-exports shows it.
+                    try {
+                      await recordReelExportMut({
+                        storyboardId: storyboardId as never,
+                        storageId: storageId as never,
+                        sourceUrl: publicUrl,
+                        shotCount: result.shotCount,
+                        totalDurationS: result.totalDurationS,
+                        byteLength: result.byteLength,
+                        title: manifest.title,
+                      });
+                    } catch (recordErr) {
+                      // Upload succeeded — surfacing a row-write error
+                      // would confuse the producer. Log quietly.
+                      console.warn("recordReelExport failed", recordErr);
+                    }
+                    setExportedUrl(publicUrl);
+                    setExportStageLabel(null);
                   } catch (err) {
                     setExportError(
                       err instanceof Error ? err.message : String(err),
                     );
+                    setExportStageLabel(null);
                   } finally {
                     setExporting(false);
                   }
@@ -411,6 +527,45 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
               <div className="flex items-start gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-200">
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{exportError}</span>
+              </div>
+            ) : null}
+
+            {pastExports && pastExports.length > 0 ? (
+              <div className="rounded-md border border-border/40 bg-background/60 p-2">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <History className="size-3" />
+                  Past exports
+                </div>
+                <ul className="space-y-1 text-[11px]">
+                  {pastExports.slice(0, 5).map((row) => (
+                    <li
+                      key={row._id}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span
+                        className="truncate text-muted-foreground"
+                        title={`${row.shotCount} shots · ${row.totalDurationS.toFixed(1)}s · ${(row.byteLength / (1024 * 1024)).toFixed(1)} MB`}
+                      >
+                        {new Date(row.createdAt).toLocaleString()} ·{" "}
+                        {row.shotCount} shots ·{" "}
+                        {row.totalDurationS.toFixed(1)}s
+                      </span>
+                      <a
+                        href={row.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 underline hover:text-foreground"
+                      >
+                        open
+                      </a>
+                    </li>
+                  ))}
+                  {pastExports.length > 5 ? (
+                    <li className="text-[10px] text-muted-foreground">
+                      +{pastExports.length - 5} older exports
+                    </li>
+                  ) : null}
+                </ul>
               </div>
             ) : null}
           </div>

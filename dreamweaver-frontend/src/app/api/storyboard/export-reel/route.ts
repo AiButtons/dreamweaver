@@ -24,6 +24,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { ConvexHttpClient } from "convex/browser";
+import type { Id } from "../../../../../convex/_generated/dataModel";
 import { getToken } from "@/lib/auth-server";
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { createLogger, resolveRequestId } from "@/lib/observability";
@@ -279,18 +280,46 @@ export async function POST(request: NextRequest): Promise<Response> {
     )) as string;
     uploadEnd({ storageId, byteLength: reelBytes.byteLength });
 
+    // Persist the export so the ReelPlayer can surface a "Past exports"
+    // list and producers can re-open / re-download without paying
+    // another ffmpeg run.
+    let reelExportId: string | null = null;
+    try {
+      reelExportId = (await client.mutation(
+        mutationRef("reelExports:recordReelExport"),
+        {
+          storyboardId: storyboardId as Id<"storyboards">,
+          storageId: storageId as Id<"_storage">,
+          sourceUrl: publicUrl,
+          shotCount: manifest.shots.length,
+          totalDurationS: manifest.totalDurationS,
+          byteLength: reelBytes.byteLength,
+          title: manifest.title,
+        },
+      )) as string;
+    } catch (err) {
+      // The upload succeeded; failing to record the row is annoying
+      // but not fatal — the URL still works. Log so operators notice.
+      log.warn("reel_export_record_failed", {
+        error: err instanceof Error ? err.message : String(err),
+        storageId,
+      });
+    }
+
     log.info("export_completed", {
       storyboardId,
       shotCount: manifest.shots.length,
       totalDurationS: manifest.totalDurationS,
       storageId,
       byteLength: reelBytes.byteLength,
+      reelExportId,
     });
 
     return NextResponse.json(
       {
         url: publicUrl,
         storageId,
+        reelExportId,
         shotCount: manifest.shots.length,
         totalDurationS: manifest.totalDurationS,
         byteLength: reelBytes.byteLength,

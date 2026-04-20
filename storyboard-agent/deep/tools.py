@@ -441,6 +441,46 @@ def request_generate_shot_batch(
 
 
 @tool
+def request_export_reel(
+    storyboard_id: str,
+    rationale: str,
+    shot_count: int = 0,
+    estimated_duration_s: float = 0.0,
+) -> Dict[str, Any]:
+    """Requests human approval to export the storyboard's reel as an mp4.
+    Interrupt target.
+
+    Calls the server-side ffmpeg pipeline: normalizes every shot into a
+    uniform 1920x1080@30 clip (video / still-image loop / silent black
+    fallback per what's been rendered) and concats them into a single
+    mp4 uploaded to Convex storage. The export row is persisted so
+    producers can re-download without paying another ffmpeg run.
+
+    The export is idempotent in behavior (always produces a fresh row
+    and a fresh mp4) but not in effect (each run costs ffmpeg + upload
+    time), so agent-initiated exports should be rare + deliberate.
+    """
+    safe_shot_count = max(0, int(shot_count) if isinstance(shot_count, (int, float)) else 0)
+    safe_duration = max(
+        0.0,
+        float(estimated_duration_s)
+        if isinstance(estimated_duration_s, (int, float))
+        else 0.0,
+    )
+    return {
+        "schemaVersion": "v2",
+        "action": "request_export_reel",
+        "status": "waiting_for_human",
+        "input": {
+            "storyboardId": storyboard_id,
+            "shotCount": safe_shot_count,
+            "estimatedDurationS": safe_duration,
+            "rationale": " ".join(rationale.split())[:1200],
+        },
+    }
+
+
+@tool
 def request_generate_shot_audio_batch(
     storyboard_id: str,
     branch_id: str,
@@ -1086,6 +1126,7 @@ ALL_TOOLS = [
     request_generate_shot_batch,
     request_generate_shot_video_batch,
     request_generate_shot_audio_batch,
+    request_export_reel,
     select_agent_team,
     create_agent_team,
     update_agent_team_member,
@@ -1121,6 +1162,7 @@ SUPERVISOR_CORE_TOOLS = [
     request_generate_shot_batch,
     request_generate_shot_video_batch,
     request_generate_shot_audio_batch,
+    request_export_reel,
     select_agent_team,
 ]
 
@@ -1144,6 +1186,7 @@ DEFAULT_RUNTIME_ALLOWLIST: List[str] = [
     "shot_batch.run",
     "shot_video_batch.run",
     "shot_audio_batch.run",
+    "reel_export.run",
 ]
 
 TOOL_POLICY_TOKENS: Dict[str, str] = {
@@ -1168,6 +1211,7 @@ TOOL_POLICY_TOKENS: Dict[str, str] = {
     request_generate_shot_batch.name: "shot_batch.run",
     request_generate_shot_video_batch.name: "shot_video_batch.run",
     request_generate_shot_audio_batch.name: "shot_audio_batch.run",
+    request_export_reel.name: "reel_export.run",
     select_agent_team.name: "team.manage",
     create_agent_team.name: "team.manage",
     update_agent_team_member.name: "team.manage",

@@ -540,6 +540,47 @@ export const listNodeMedia = query({
   },
 });
 
+/**
+ * M5 — dailies review loop. Returns the `nodeId`s of every shot whose
+ * currently-active image has `takeStatus: "ng"` (producer flagged as
+ * no-good). The `/api/storyboard/generate-shots-stream` route consumes
+ * this when invoked with `flaggedOnly: true` so "Regenerate flagged"
+ * can re-render only the rejected subset without touching approved
+ * work.
+ *
+ * Scope: image takeStatus only for now — that's the status the Review
+ * tab's Take-Status pill row writes to. Video + audio regeneration can
+ * be added later without changing the shape by returning a richer map.
+ */
+export const listShotsWithFlaggedMedia = query({
+  args: {
+    storyboardId: v.id("storyboards"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const nodes = await ctx.db
+      .query("storyboardNodes")
+      .withIndex("by_storyboard_updatedAt", (q) =>
+        q.eq("storyboardId", args.storyboardId),
+      )
+      .collect();
+
+    const flaggedNodeIds: string[] = [];
+    for (const node of nodes) {
+      if (node.nodeType !== "shot") continue;
+      const activeId = node.media.activeImageId;
+      if (!activeId) continue;
+      const asset = await ctx.db.get(activeId);
+      if (!asset) continue;
+      if (asset.takeStatus === "ng") {
+        flaggedNodeIds.push(node.nodeId);
+      }
+    }
+    return { flaggedNodeIds };
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Delivery-variant surface (Enhancement #3: variant matrix)
 // ---------------------------------------------------------------------------
