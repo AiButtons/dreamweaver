@@ -163,6 +163,18 @@ export type GenerateShotVideoBatchInput = {
   videoModelId: string;
 };
 
+export type GenerateShotAudioBatchInput = {
+  storyboardId: string;
+  branchId: string;
+  nodeCount: number;
+  rationale: string;
+  skipExisting: boolean;
+  concurrency: number;
+  voice: string;
+  model: string;
+  speed: number;
+};
+
 /**
  * CustomEvent name the bridge dispatches to kick off the batch button. The
  * `GenerateAllShotsButton` listens for this on `window` so the agent doesn't
@@ -210,6 +222,37 @@ const dispatchShotVideoBatchTrigger = (
   window.dispatchEvent(
     new CustomEvent<ShotVideoBatchTriggerDetail>(
       SHOT_VIDEO_BATCH_TRIGGER_EVENT,
+      { detail },
+    ),
+  );
+};
+
+/**
+ * M5 #4 — matching event for the audio batch. Keep the name stable with
+ * GenerateAllAudiosButton's own declaration so one listener fires for
+ * both the in-component run button and agent-driven dispatches.
+ */
+export const SHOT_AUDIO_BATCH_TRIGGER_EVENT =
+  "storyboard:generate-shot-audio-batch";
+
+export type ShotAudioBatchTriggerDetail = {
+  storyboardId: string;
+  skipExisting: boolean;
+  concurrency: number;
+  voice?: string;
+  model?: string;
+  speed?: number;
+};
+
+const dispatchShotAudioBatchTrigger = (
+  detail: ShotAudioBatchTriggerDetail,
+): void => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent<ShotAudioBatchTriggerDetail>(
+      SHOT_AUDIO_BATCH_TRIGGER_EVENT,
       { detail },
     ),
   );
@@ -327,6 +370,59 @@ const parseGenerateShotVideoBatchInput = (
     skipExisting,
     concurrency,
     videoModelId,
+  };
+};
+
+const parseGenerateShotAudioBatchInput = (
+  value: unknown,
+): GenerateShotAudioBatchInput | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const storyboardId =
+    typeof value.storyboardId === "string" ? value.storyboardId : "";
+  const branchId = typeof value.branchId === "string" ? value.branchId : "main";
+  const rationale = typeof value.rationale === "string" ? value.rationale : "";
+  const nodeCount =
+    typeof value.nodeCount === "number" && Number.isFinite(value.nodeCount)
+      ? Math.max(0, Math.floor(value.nodeCount))
+      : 0;
+  const skipExisting =
+    typeof value.skipExisting === "boolean" ? value.skipExisting : true;
+  const concurrencyRaw =
+    typeof value.concurrency === "number" && Number.isFinite(value.concurrency)
+      ? Math.floor(value.concurrency)
+      : 3;
+  // Audio batch caps at 5 — OpenAI TTS tolerates more parallel requests
+  // than Modal video, but we don't push it any higher to keep rate-limit
+  // headroom for other concurrent users on the key.
+  const concurrency = Math.max(1, Math.min(5, concurrencyRaw));
+  const voice =
+    typeof value.voice === "string" && value.voice.length > 0
+      ? value.voice
+      : "nova";
+  const model =
+    typeof value.model === "string" && value.model.length > 0
+      ? value.model
+      : "tts-1";
+  const speedRaw =
+    typeof value.speed === "number" && Number.isFinite(value.speed)
+      ? value.speed
+      : 1.0;
+  const speed = Math.max(0.25, Math.min(4.0, speedRaw));
+  if (!storyboardId) {
+    return null;
+  }
+  return {
+    storyboardId,
+    branchId,
+    nodeCount,
+    rationale,
+    skipExisting,
+    concurrency,
+    voice,
+    model,
+    speed,
   };
 };
 
@@ -2280,6 +2376,117 @@ export function StoryboardCopilotBridge({
     },
   });
 
+  useHumanInTheLoop({
+    name: "request_generate_shot_audio_batch",
+    description:
+      "Approve/edit/reject kicking off the Generate-All-Audio (OpenAI TTS) narration batch on the current storyboard.",
+    parameters: [
+      { name: "storyboardId", type: "string", description: "Storyboard id", required: true },
+      { name: "branchId", type: "string", description: "Branch id (main by default)", required: true },
+      { name: "nodeCount", type: "number", description: "Total shot count", required: true },
+      { name: "rationale", type: "string", description: "Why narrate now", required: true },
+      { name: "skipExisting", type: "boolean", description: "Skip shots that already have narration", required: false },
+      { name: "concurrency", type: "number", description: "Parallel workers (1-5)", required: false },
+      { name: "voice", type: "string", description: "OpenAI voice (alloy|echo|fable|onyx|nova|shimmer)", required: false },
+      { name: "model", type: "string", description: "OpenAI TTS model id (tts-1 | tts-1-hd)", required: false },
+      { name: "speed", type: "number", description: "0.25-4.0; defaults to 1.0", required: false },
+    ],
+    render: ({ args, status, respond }) => {
+      if (status !== "executing" || !respond) {
+        return <></>;
+      }
+      const input = parseGenerateShotAudioBatchInput(args);
+      if (!input) {
+        return (
+          <ToolStatusCard
+            name="request_generate_shot_audio_batch"
+            status="failed"
+            args={JSON.stringify(args ?? {}, null, 2)}
+            result={JSON.stringify({ error: "Invalid shot audio batch payload" })}
+          />
+        );
+      }
+      const isOnTargetStoryboard =
+        Boolean(storyboardId) && storyboardId === input.storyboardId;
+      const subtitle = `${input.nodeCount} shot${input.nodeCount === 1 ? "" : "s"} · voice ${input.voice} · ${input.model} · speed ${input.speed}${isOnTargetStoryboard ? "" : " · will navigate"}`;
+
+      const startBatch = () => {
+        const detail: ShotAudioBatchTriggerDetail = {
+          storyboardId: input.storyboardId,
+          skipExisting: input.skipExisting,
+          concurrency: input.concurrency,
+          voice: input.voice,
+          model: input.model,
+          speed: input.speed,
+        };
+        if (isOnTargetStoryboard) {
+          dispatchShotAudioBatchTrigger(detail);
+          return { navigated: false, dispatched: true };
+        }
+        router.push(`/storyboard/${encodeURIComponent(input.storyboardId)}`);
+        window.setTimeout(() => dispatchShotAudioBatchTrigger(detail), 600);
+        return { navigated: true, dispatched: true };
+      };
+
+      return (
+        <ApprovalCard
+          title="Generate all shot narration"
+          subtitle={subtitle}
+          body={
+            input.rationale ||
+            "Run OpenAI TTS over every shot's derived narration text."
+          }
+          onApprove={async () => {
+            const outcome = startBatch();
+            await auditToolCall({
+              tool: "request_generate_shot_audio_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+                voice: input.voice,
+                model: input.model,
+                speed: input.speed,
+                navigated: outcome.navigated,
+              },
+            });
+            respond({ approved: true, ...outcome });
+          }}
+          onEdit={async () => {
+            const outcome = startBatch();
+            await auditToolCall({
+              tool: "request_generate_shot_audio_batch",
+              result: "success",
+              details: {
+                storyboardId: input.storyboardId,
+                nodeCount: input.nodeCount,
+                concurrency: input.concurrency,
+                voice: input.voice,
+                model: input.model,
+                speed: input.speed,
+                navigated: outcome.navigated,
+                edited: true,
+              },
+            });
+            respond({ approved: true, edited: true, ...outcome });
+          }}
+          onReject={async () => {
+            await auditToolCall({
+              tool: "request_generate_shot_audio_batch",
+              result: "blocked",
+              details: { storyboardId: input.storyboardId },
+            });
+            respond({
+              approved: false,
+              blockedReason: "Producer rejected shot audio batch.",
+            });
+          }}
+        />
+      );
+    },
+  });
+
   return (
     <>
       <CopilotActionRegistration name="propose_branch" />
@@ -2305,6 +2512,7 @@ export function StoryboardCopilotBridge({
       <CopilotActionRegistration name="request_ingestion_run" />
       <CopilotActionRegistration name="request_generate_shot_batch" />
       <CopilotActionRegistration name="request_generate_shot_video_batch" />
+      <CopilotActionRegistration name="request_generate_shot_audio_batch" />
       <CopilotSidebar
         defaultOpen={false}
         clickOutsideToClose

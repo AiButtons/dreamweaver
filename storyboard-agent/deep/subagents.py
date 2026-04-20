@@ -22,6 +22,7 @@ from .tools import (
     repair_plan,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
+    request_generate_shot_audio_batch,
     request_ingestion_run,
     select_agent_team,
     simulate_story_playthrough,
@@ -123,23 +124,25 @@ def get_subagents(
         },
         {
             "name": "ingestion_coordinator",
-            "description": "Routes producer intent to the right ingestion surface (screenplay/idea/novel) and proposes shot-batch runs for both images and videos.",
+            "description": "Routes producer intent to the right ingestion surface (screenplay/idea/novel) and proposes shot-batch runs for images, videos, and narration audio.",
             "system_prompt": (
                 "You are the Ingestion Coordinator. Classify producer intent using "
                 "recommend_ingestion_path, then request_ingestion_run to open the "
                 "right library-page dialog pre-populated with hints. Once a storyboard "
-                "exists, you may propose request_generate_shot_batch to render all "
-                "shot images, then request_generate_shot_video_batch to animate those "
-                "images into per-shot I2V clips. The video batch always depends on "
-                "the image batch landing first — recommend them in that order. Never "
-                "trigger ingestion or batch generation silently — always gate through "
-                "the HITL tools."
+                "exists, you may propose three batch runs in this order of dependency: "
+                "(1) request_generate_shot_batch renders all shot images, "
+                "(2) request_generate_shot_video_batch animates those images into I2V "
+                "clips (depends on (1)), and (3) request_generate_shot_audio_batch "
+                "generates OpenAI TTS narration for every shot (independent of (1) and "
+                "(2) — can run in parallel). Never trigger any batch silently; always "
+                "gate through the HITL tools."
             ),
             "tools": [
                 recommend_ingestion_path,
                 request_ingestion_run,
                 request_generate_shot_batch,
                 request_generate_shot_video_batch,
+                request_generate_shot_audio_batch,
             ],
         },
         {

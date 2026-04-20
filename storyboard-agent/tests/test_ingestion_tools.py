@@ -21,6 +21,7 @@ from deep.tools import (
     recommend_ingestion_path,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
+    request_generate_shot_audio_batch,
     request_ingestion_run,
 )
 
@@ -241,6 +242,72 @@ class RequestGenerateShotVideoBatchTests(unittest.TestCase):
         self.assertEqual(payload["input"]["videoModelId"], "ltx-2.3")
 
 
+class RequestGenerateShotAudioBatchTests(unittest.TestCase):
+    def test_shape_is_waiting_for_human(self) -> None:
+        payload = request_generate_shot_audio_batch.invoke(
+            {
+                "storyboard_id": "sb_42",
+                "branch_id": "br_main",
+                "node_count": 8,
+                "rationale": "Narrate everything.",
+            }
+        )
+        self.assertEqual(payload["status"], "waiting_for_human")
+        self.assertEqual(payload["action"], "request_generate_shot_audio_batch")
+        self.assertEqual(payload["input"]["voice"], "nova")
+        self.assertEqual(payload["input"]["model"], "tts-1")
+        self.assertEqual(payload["input"]["speed"], 1.0)
+
+    def test_speed_is_clamped(self) -> None:
+        # Speed caps at 4.0 and floors at 0.25 per OpenAI TTS docs.
+        payload_fast = request_generate_shot_audio_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 1,
+                "rationale": "",
+                "speed": 999,
+            }
+        )
+        payload_slow = request_generate_shot_audio_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 1,
+                "rationale": "",
+                "speed": -5,
+            }
+        )
+        self.assertEqual(payload_fast["input"]["speed"], 4.0)
+        self.assertEqual(payload_slow["input"]["speed"], 0.25)
+
+    def test_voice_normalized_to_lowercase(self) -> None:
+        payload = request_generate_shot_audio_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 1,
+                "rationale": "",
+                "voice": "  SHIMMER  ",
+            }
+        )
+        # Voice validation happens at the route boundary; the tool
+        # just normalizes case + strips whitespace.
+        self.assertEqual(payload["input"]["voice"], "shimmer")
+
+    def test_concurrency_caps_at_five(self) -> None:
+        payload = request_generate_shot_audio_batch.invoke(
+            {
+                "storyboard_id": "sb_1",
+                "branch_id": "br_main",
+                "node_count": 1,
+                "rationale": "",
+                "concurrency": 99,
+            }
+        )
+        self.assertEqual(payload["input"]["concurrency"], 5)
+
+
 class PolicyAndRegistryTests(unittest.TestCase):
     def test_policy_tokens_registered(self) -> None:
         self.assertEqual(
@@ -256,17 +323,23 @@ class PolicyAndRegistryTests(unittest.TestCase):
             TOOL_POLICY_TOKENS[request_generate_shot_video_batch.name],
             "shot_video_batch.run",
         )
+        self.assertEqual(
+            TOOL_POLICY_TOKENS[request_generate_shot_audio_batch.name],
+            "shot_audio_batch.run",
+        )
 
     def test_default_allowlist_includes_new_tokens(self) -> None:
         self.assertIn("ingestion.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
         self.assertIn("shot_video_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
+        self.assertIn("shot_audio_batch.run", DEFAULT_RUNTIME_ALLOWLIST)
 
     def test_is_tool_allowed_under_default_policy(self) -> None:
         # Passing empty allowlist should trigger default policy.
         self.assertTrue(is_tool_allowed([], "ingestion.run"))
         self.assertTrue(is_tool_allowed([], "shot_batch.run"))
         self.assertTrue(is_tool_allowed([], "shot_video_batch.run"))
+        self.assertTrue(is_tool_allowed([], "shot_audio_batch.run"))
         # But team.manage is still gated behind explicit opt-in.
         self.assertFalse(is_tool_allowed([], "team.manage"))
 
@@ -276,6 +349,7 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertIn(request_ingestion_run.name, supervisor_names)
         self.assertIn(request_generate_shot_batch.name, supervisor_names)
         self.assertIn(request_generate_shot_video_batch.name, supervisor_names)
+        self.assertIn(request_generate_shot_audio_batch.name, supervisor_names)
 
     def test_new_tools_present_in_all_tools(self) -> None:
         all_names = {getattr(t, "name", "") for t in ALL_TOOLS}
@@ -283,6 +357,7 @@ class PolicyAndRegistryTests(unittest.TestCase):
         self.assertIn(request_ingestion_run.name, all_names)
         self.assertIn(request_generate_shot_batch.name, all_names)
         self.assertIn(request_generate_shot_video_batch.name, all_names)
+        self.assertIn(request_generate_shot_audio_batch.name, all_names)
 
     def test_video_batch_policy_gate_independent_of_image_batch(self) -> None:
         # A strict allowlist that only enables image batch must not leak

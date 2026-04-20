@@ -1,15 +1,20 @@
 "use client";
 
 /**
- * M5 #3 — pragmatic reel preview. Fetches a manifest of ordered shots
- * + media URLs and plays them back-to-back using a single <video>
- * element (falling back to <img> when a shot has no video). Audio
- * tracks play in parallel on a separate <audio> element, gated to the
- * shot's declared duration so narration doesn't bleed across cuts.
+ * M5 #3 + #6 — reel preview + real mp4 export.
  *
- * Not a real encoded cut — we're not exporting an mp4. But it gives
- * producers an instant playthrough so they can see the rhythm of the
- * storyboard before sinking LTX-2.3 cost into re-renders.
+ * Preview: Fetches a manifest of ordered shots + media URLs and plays
+ * them back-to-back using a single <video> element (falling back to
+ * <img> when a shot has no video). Audio tracks play in parallel on a
+ * separate <audio> element, gated to the shot's declared duration so
+ * narration doesn't bleed across cuts. Cheap, renders instantly, lets
+ * producers iterate on pacing before committing to a real encode.
+ *
+ * Export: The "Export mp4" button POSTs to /api/storyboard/export-reel
+ * which normalizes each shot through ffmpeg (uniform 1920x1080@30 with
+ * audio overlay / still-frame loop / black-frame fallback) and concats
+ * the result into a single mp4. Returns a Convex-storage URL the
+ * producer can open or download.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,7 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { AlertTriangle, Download, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import type { ReelManifest, ReelShot } from "@/app/api/storyboard/reel-manifest/route";
 
 export interface ReelPlayerProps {
@@ -38,6 +43,9 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [autoAdvanceAt, setAutoAdvanceAt] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportedUrl, setExportedUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,6 +58,9 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
       setError(null);
       setCurrentIndex(0);
       setAutoAdvanceAt(null);
+      setExporting(false);
+      setExportError(null);
+      setExportedUrl(null);
       return;
     }
     let cancelled = false;
@@ -318,6 +329,88 @@ export function ReelPlayer({ open, onOpenChange, storyboardId }: ReelPlayerProps
             {autoAdvanceAt !== null && status === "playing" ? (
               <div className="text-[10px] tabular-nums text-muted-foreground">
                 Auto-advancing at {shot.durationS.toFixed(1)}s
+              </div>
+            ) : null}
+
+            {/* M5 #6 — server-side mp4 export */}
+            <div className="mt-1 flex items-center justify-between gap-3 border-t border-border/60 pt-2">
+              <div className="text-[11px] text-muted-foreground">
+                {exportedUrl ? (
+                  <span>
+                    Exported — <a
+                      href={exportedUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-foreground"
+                    >
+                      open mp4
+                    </a>
+                  </span>
+                ) : exporting ? (
+                  <span>Encoding reel… (ffmpeg can take 1-2s per shot)</span>
+                ) : (
+                  <span>
+                    Export concatenates every shot into a single mp4 via
+                    ffmpeg on the server.
+                  </span>
+                )}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                disabled={exporting || !manifest || manifest.shots.length === 0}
+                onClick={async () => {
+                  setExporting(true);
+                  setExportError(null);
+                  setExportedUrl(null);
+                  try {
+                    const res = await fetch(
+                      "/api/storyboard/export-reel",
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ storyboardId }),
+                      },
+                    );
+                    if (!res.ok) {
+                      const errData = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      throw new Error(
+                        errData.error ?? `Export failed (${res.status})`,
+                      );
+                    }
+                    const data = (await res.json()) as { url: string };
+                    setExportedUrl(data.url);
+                  } catch (err) {
+                    setExportError(
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  } finally {
+                    setExporting(false);
+                  }
+                }}
+              >
+                {exporting ? (
+                  <>
+                    <span className="size-3 animate-spin rounded-full border-2 border-current/30 border-t-current" />
+                    Encoding…
+                  </>
+                ) : (
+                  <>
+                    <Download className="size-4" />
+                    Export mp4
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {exportError ? (
+              <div className="flex items-start gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-200">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>{exportError}</span>
               </div>
             ) : null}
           </div>

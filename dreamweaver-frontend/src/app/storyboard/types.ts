@@ -130,6 +130,9 @@ export interface StoryNodeData {
     imagePrompt?: string;
     videoPrompt?: string;
     negativePrompt?: string;
+    /** M5 #5 — per-shot TTS narration override. Empty / undefined falls
+     *  back to the auto-extracted narration from `segment`. */
+    audioDesc?: string;
     continuityDirectives: string[];
   };
   shotMeta?: ShotMeta;

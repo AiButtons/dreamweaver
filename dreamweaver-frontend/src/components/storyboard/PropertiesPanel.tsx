@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2, Users, X, Plus } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ImageIcon, Video, Music, Sparkles, Wand2, Settings2, Users, Volume2, X, Plus } from "lucide-react";
 import { useQuery } from "convex/react";
 import { queryRef } from "@/lib/convexRefs";
 import { MediaType } from "@/app/storyboard/types";
@@ -75,6 +75,9 @@ interface PropertiesPanelProps {
   onEditNode: (nodeId: string, instruction: string) => void;
   onUpdateShotMeta?: (nodeId: string, next: ShotMeta) => void;
   onSetNodeCharacterIds?: (nodeId: string, characterIds: string[]) => Promise<void> | void;
+  /** M5 #5 — update the per-shot TTS narration override. Empty string
+   *  clears the override. */
+  onSetNodeAudioDesc?: (nodeId: string, audioDesc: string) => Promise<void> | void;
   deliveryVariantCallbacks?: DeliveryVariantCallbacks;
   userIdentity?: UserIdentity | null;
   reviewCallbacks?: ReviewCallbacks;
@@ -114,6 +117,7 @@ export default function PropertiesPanel({
   onEditNode,
   onUpdateShotMeta,
   onSetNodeCharacterIds,
+  onSetNodeAudioDesc,
   deliveryVariantCallbacks,
   userIdentity,
   reviewCallbacks,
@@ -272,6 +276,14 @@ export default function PropertiesPanel({
               storyboardId={storyboardId}
               characterIds={data.entityRefs?.characterIds ?? []}
               onSetCharacterIds={onSetNodeCharacterIds}
+              disabled={isProcessing}
+            />
+
+            <NarrationOverrideSection
+              nodeId={id}
+              audioDesc={data.promptPack?.audioDesc ?? ""}
+              derivedFallback={data.promptPack?.imagePrompt ?? data.segment ?? ""}
+              onSetAudioDesc={onSetNodeAudioDesc}
               disabled={isProcessing}
             />
 
@@ -952,6 +964,112 @@ interface IdentityPackRow {
 
 interface ConstraintBundleQueryResult {
   identityPacks?: IdentityPackRow[];
+}
+
+// ---------------------------------------------------------------------------
+// NarrationOverrideSection (M5 #5)
+//
+// Lets producers override the per-shot TTS narration text. When empty,
+// the audio batch derives narration from `segment`; when set, the override
+// is used verbatim. Blur-commit so the mutation doesn't fire on every
+// keystroke.
+// ---------------------------------------------------------------------------
+
+interface NarrationOverrideSectionProps {
+  nodeId: string;
+  audioDesc: string;
+  derivedFallback: string;
+  onSetAudioDesc?: (nodeId: string, audioDesc: string) => Promise<void> | void;
+  disabled?: boolean;
+}
+
+function NarrationOverrideSection({
+  nodeId,
+  audioDesc,
+  derivedFallback,
+  onSetAudioDesc,
+  disabled,
+}: NarrationOverrideSectionProps) {
+  const [draft, setDraft] = useState(audioDesc);
+  const [saving, setSaving] = useState(false);
+
+  // Sync draft when the panel re-opens on a different node or the
+  // server value changes via another client.
+  useEffect(() => {
+    setDraft(audioDesc);
+  }, [audioDesc, nodeId]);
+
+  const commit = useCallback(
+    async (next: string) => {
+      if (!onSetAudioDesc) return;
+      if (next.trim() === audioDesc.trim()) return;
+      setSaving(true);
+      try {
+        await onSetAudioDesc(nodeId, next);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [audioDesc, nodeId, onSetAudioDesc],
+  );
+
+  const isOverridden = audioDesc.trim().length > 0;
+  const preview =
+    (isOverridden ? audioDesc : derivedFallback).trim().slice(0, 140) || "—";
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card/40 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <Volume2 className="size-3.5" />
+          Narration override
+        </div>
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[10px]",
+            isOverridden
+              ? "border-amber-400/40 bg-amber-400/10 text-amber-200"
+              : "border-border/60 bg-background/60 text-muted-foreground",
+          )}
+        >
+          {isOverridden ? "custom" : "auto-extracted"}
+        </span>
+      </div>
+      <div className="mt-2 text-[11px] text-muted-foreground">
+        What the TTS voice reads for this shot. Leave empty to auto-extract
+        from the shot&apos;s segment text.
+      </div>
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => void commit(e.target.value)}
+        placeholder={derivedFallback.slice(0, 180) || "Narration text…"}
+        disabled={disabled || !onSetAudioDesc || saving}
+        className="mt-2 min-h-[72px] bg-background/60 text-[12px]"
+        maxLength={4096}
+      />
+      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span className="tabular-nums">{draft.length} / 4096</span>
+        {isOverridden ? (
+          <button
+            type="button"
+            className="text-[10px] underline hover:text-foreground disabled:opacity-50"
+            onClick={() => {
+              setDraft("");
+              void commit("");
+            }}
+            disabled={disabled || !onSetAudioDesc || saving}
+          >
+            Clear override
+          </button>
+        ) : (
+          <span className="max-w-[60%] truncate" title={preview}>
+            Will read: “{preview}{preview.length >= 140 ? "…" : ""}”
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CharactersInShotSection({

@@ -162,6 +162,11 @@ export default defineSchema({
       imagePrompt: v.optional(v.string()),
       videoPrompt: v.optional(v.string()),
       negativePrompt: v.optional(v.string()),
+      // M5 #5 — optional narration override for per-shot TTS. When
+      // present, the audio batch route uses this verbatim instead of
+      // its auto-extracted narration from `segment`. Keeps producer
+      // edits durable across repeat audio-batch runs.
+      audioDesc: v.optional(v.string()),
       continuityDirectives: v.array(v.string()),
     }),
     shotMeta: v.optional(

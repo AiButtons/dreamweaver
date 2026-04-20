@@ -1517,6 +1517,48 @@ export const setNodeCharacterIds = mutation({
   },
 });
 
+/**
+ * M5 #5 — update just the per-shot narration override (`promptPack.audioDesc`).
+ * Kept as a dedicated mutation so the PropertiesPanel can patch this
+ * single field without having to send the entire promptPack on each
+ * keystroke. The audio batch route (`/api/storyboard/generate-shot-audios-stream`)
+ * reads this field first in `deriveShotNarrationText`, so producer edits
+ * persist across repeat batch runs.
+ *
+ * Pass an empty string to clear the override and fall back to the
+ * auto-extracted narration.
+ */
+export const setNodeAudioDesc = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    nodeId: v.string(),
+    audioDesc: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const node = await ctx.db
+      .query("storyboardNodes")
+      .withIndex("by_storyboard_node", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("nodeId", args.nodeId),
+      )
+      .unique();
+    if (!node) {
+      throw new ConvexError("Node not found");
+    }
+    const trimmed = args.audioDesc.trim();
+    await ctx.db.patch(node._id, {
+      promptPack: {
+        ...node.promptPack,
+        audioDesc: trimmed.length > 0 ? trimmed : undefined,
+      },
+      updatedAt: Date.now(),
+    });
+    await ctx.db.patch(args.storyboardId, { updatedAt: Date.now() });
+    return { nodeId: args.nodeId, audioDesc: trimmed.length > 0 ? trimmed : null };
+  },
+});
+
 export const deleteNode = mutation({
   args: {
     storyboardId: v.id("storyboards"),

@@ -841,6 +841,37 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     ],
   );
 
+  const setNodeAudioDescMutation = useMutation(
+    mutationRef("storyboards:setNodeAudioDesc"),
+  );
+  const handleSetNodeAudioDesc = useCallback(
+    async (nodeId: string, audioDesc: string) => {
+      if (!activeStoryboardId) return;
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      // Optimistic local patch so the "custom" / "auto-extracted" badge in
+      // NarrationOverrideSection flips immediately without waiting on the
+      // server round-trip.
+      const trimmed = audioDesc.trim();
+      updateNodeData(nodeId, {
+        promptPack: {
+          ...(node.data.promptPack ?? {}),
+          audioDesc: trimmed.length > 0 ? trimmed : undefined,
+        },
+      });
+      try {
+        await setNodeAudioDescMutation({
+          storyboardId: activeStoryboardId,
+          nodeId,
+          audioDesc,
+        });
+      } catch (err) {
+        console.warn("setNodeAudioDesc failed", err);
+      }
+    },
+    [activeStoryboardId, nodes, setNodeAudioDescMutation, updateNodeData],
+  );
+
   // Bundle the seven delivery-variant mutations into a single callbacks
   // object so PropertiesPanel doesn't balloon its props list. Memoized so
   // the inner <DeliveryMatrixSection> doesn't re-render on unrelated state.
@@ -2250,6 +2281,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
                     onEditNode={handleEditNode}
                     onUpdateShotMeta={handleUpdateShotMeta}
                     onSetNodeCharacterIds={handleSetNodeCharacterIds}
+                    onSetNodeAudioDesc={handleSetNodeAudioDesc}
                     deliveryVariantCallbacks={deliveryVariantCallbacks}
                     userIdentity={userIdentity}
                     reviewCallbacks={reviewCallbacks}

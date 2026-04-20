@@ -441,6 +441,58 @@ def request_generate_shot_batch(
 
 
 @tool
+def request_generate_shot_audio_batch(
+    storyboard_id: str,
+    branch_id: str,
+    node_count: int,
+    rationale: str,
+    skip_existing: bool = True,
+    concurrency: int = 3,
+    voice: str = "nova",
+    model: str = "tts-1",
+    speed: float = 1.0,
+) -> Dict[str, Any]:
+    """Requests human approval to run the Generate-All-Audio (TTS) batch. Interrupt target.
+
+    Triggers per-shot narration rendering via OpenAI TTS. Unlike the video
+    batch this has no image prerequisite — the pipeline derives narration
+    text from each shot's segment (or promptPack.imagePrompt as fallback).
+
+    ``voice`` is validated against the OpenAI TTS vocabulary
+    (alloy/echo/fable/onyx/nova/shimmer); unrecognized values are coerced
+    to "nova" at the route boundary.
+    ``speed`` is clamped in [0.25, 4.0]. ``concurrency`` caps at 5.
+    """
+    safe_concurrency = max(
+        1,
+        min(5, int(concurrency) if isinstance(concurrency, (int, float)) else 3),
+    )
+    safe_node_count = max(0, int(node_count) if isinstance(node_count, (int, float)) else 0)
+    safe_speed = max(
+        0.25,
+        min(4.0, float(speed) if isinstance(speed, (int, float)) else 1.0),
+    )
+    voice_norm = (voice or "").strip().lower() or "nova"
+    model_norm = (model or "").strip() or "tts-1"
+    return {
+        "schemaVersion": "v2",
+        "action": "request_generate_shot_audio_batch",
+        "status": "waiting_for_human",
+        "input": {
+            "storyboardId": storyboard_id,
+            "branchId": branch_id,
+            "nodeCount": safe_node_count,
+            "rationale": " ".join(rationale.split())[:1200],
+            "skipExisting": bool(skip_existing),
+            "concurrency": safe_concurrency,
+            "voice": voice_norm,
+            "model": model_norm,
+            "speed": safe_speed,
+        },
+    }
+
+
+@tool
 def request_generate_shot_video_batch(
     storyboard_id: str,
     branch_id: str,
@@ -1033,6 +1085,7 @@ ALL_TOOLS = [
     request_ingestion_run,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
+    request_generate_shot_audio_batch,
     select_agent_team,
     create_agent_team,
     update_agent_team_member,
@@ -1067,6 +1120,7 @@ SUPERVISOR_CORE_TOOLS = [
     request_ingestion_run,
     request_generate_shot_batch,
     request_generate_shot_video_batch,
+    request_generate_shot_audio_batch,
     select_agent_team,
 ]
 
@@ -1089,6 +1143,7 @@ DEFAULT_RUNTIME_ALLOWLIST: List[str] = [
     "ingestion.run",
     "shot_batch.run",
     "shot_video_batch.run",
+    "shot_audio_batch.run",
 ]
 
 TOOL_POLICY_TOKENS: Dict[str, str] = {
@@ -1112,6 +1167,7 @@ TOOL_POLICY_TOKENS: Dict[str, str] = {
     request_ingestion_run.name: "ingestion.run",
     request_generate_shot_batch.name: "shot_batch.run",
     request_generate_shot_video_batch.name: "shot_video_batch.run",
+    request_generate_shot_audio_batch.name: "shot_audio_batch.run",
     select_agent_team.name: "team.manage",
     create_agent_team.name: "team.manage",
     update_agent_team_member.name: "team.manage",
