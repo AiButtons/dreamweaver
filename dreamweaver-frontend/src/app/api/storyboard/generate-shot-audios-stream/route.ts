@@ -18,6 +18,11 @@ import { getToken } from "@/lib/auth-server";
 import { mutationRef, queryRef } from "@/lib/convexRefs";
 import { sseFrame } from "@/lib/ingest-postprocess";
 import { createLogger, resolveRequestId } from "@/lib/observability";
+import {
+  decidePrimarySpeaker,
+  extractDialogue,
+  type SpeakerVoiceMap,
+} from "@/lib/dialogue-extract";
 import type { NodeType } from "@/app/storyboard/types";
 
 export const runtime = "nodejs";
@@ -199,18 +204,63 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
 
       try {
-        const snapshot = (await client.query(
-          queryRef("storyboards:getStoryboardSnapshot"),
-          { storyboardId },
-        )) as StoryboardSnapshot | null;
+        // Fetch snapshot + identity packs in parallel — packs carry
+        // per-character voice assignments the M6 speaker-aware routing
+        // needs before entering the shot loop.
+        const [snapshot, constraintBundle] = await Promise.all([
+          client.query(queryRef("storyboards:getStoryboardSnapshot"), {
+            storyboardId,
+          }) as Promise<StoryboardSnapshot | null>,
+          client.query(queryRef("continuityOS:listConstraintBundle"), {
+            storyboardId,
+          }) as Promise<
+            | { identityPacks?: Array<Record<string, unknown>> }
+            | null
+          >,
+        ]);
         if (!snapshot || !snapshot.storyboard) {
           send("error", { message: "Storyboard not found" });
           return;
         }
 
+        // Build a SpeakerVoiceMap keyed on the UPPERCASE character
+        // identifier the dialogue extractor emits. Packs can be indexed
+        // by either their explicit sourceCharacterId (ViMax ingester)
+        // or the pack name — cover both so manual + ingested packs
+        // both resolve.
+        const speakerVoices: SpeakerVoiceMap = {};
+        const allowedVoices = new Set([
+          "alloy",
+          "echo",
+          "fable",
+          "onyx",
+          "nova",
+          "shimmer",
+        ]);
+        for (const pack of constraintBundle?.identityPacks ?? []) {
+          const packVoice = typeof pack.voice === "string" ? pack.voice : "";
+          if (!packVoice || !allowedVoices.has(packVoice)) continue;
+          const sourceId =
+            typeof pack.sourceCharacterId === "string"
+              ? pack.sourceCharacterId
+              : "";
+          const name = typeof pack.name === "string" ? pack.name : "";
+          for (const candidate of [sourceId, name]) {
+            const key = candidate.trim().toUpperCase();
+            if (key.length > 0) speakerVoices[key] = packVoice;
+          }
+        }
+
         const shots = snapshot.nodes.filter((n) => n.nodeType === "shot");
         const total = shots.length;
-        send("open", { total, concurrency, requestId, voice, model });
+        send("open", {
+          total,
+          concurrency,
+          requestId,
+          voice,
+          model,
+          voiceAssignments: Object.keys(speakerVoices).length,
+        });
         log.info("shot_audio_batch_started", {
           storyboardId,
           total,
@@ -239,7 +289,35 @@ export async function POST(request: NextRequest): Promise<Response> {
               continue;
             }
 
-            const text = deriveShotNarrationText(shot);
+            // M6 speaker-aware routing: decide whether this shot has a
+            // single dominant speaker with an assigned voice. When yes
+            // AND the dialogue is "solo" (no competing narration prose),
+            // feed only the dialogue text to TTS in the speaker's voice
+            // — much cleaner than reading the whole segment.
+            const segmentText = shot.segment ?? "";
+            const decision = decidePrimarySpeaker(segmentText, speakerVoices);
+            let effectiveVoice = voice;
+            let text: string | null;
+            if (decision.speaker && decision.voice && decision.isSoloDialogue) {
+              effectiveVoice = decision.voice;
+              const extracted = extractDialogue(segmentText);
+              const dialogueOnly = extracted.lines
+                .filter((l) => l.speaker === decision.speaker)
+                .map((l) => l.text)
+                .join(" ")
+                .trim();
+              text = dialogueOnly.length > 0
+                ? dialogueOnly
+                : deriveShotNarrationText(shot);
+            } else if (decision.speaker && decision.voice) {
+              // Single speaker but narration also present — use their
+              // voice to read the full derived narration for cohesion.
+              effectiveVoice = decision.voice;
+              text = deriveShotNarrationText(shot);
+            } else {
+              // Narrator-only fallback.
+              text = deriveShotNarrationText(shot);
+            }
             if (!text) {
               counts.skipped += 1;
               send("shot_skipped", {
@@ -250,7 +328,13 @@ export async function POST(request: NextRequest): Promise<Response> {
               continue;
             }
 
-            send("shot_started", { nodeId, index, total });
+            send("shot_started", {
+              nodeId,
+              index,
+              total,
+              speaker: decision.speaker,
+              voice: effectiveVoice,
+            });
 
             let mediaAssetId: Id<"mediaAssets"> | null = null;
             try {
@@ -285,7 +369,12 @@ export async function POST(request: NextRequest): Promise<Response> {
                     "Content-Type": "application/json",
                     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
                   },
-                  body: JSON.stringify({ text, voice, model, speed }),
+                  body: JSON.stringify({
+                    text,
+                    voice: effectiveVoice,
+                    model,
+                    speed,
+                  }),
                   signal: abort.signal,
                 });
                 if (!res.ok) {
@@ -344,6 +433,8 @@ export async function POST(request: NextRequest): Promise<Response> {
               index,
               sourceUrl: generatedUrl,
               modelId: model,
+              speaker: decision.speaker,
+              voice: effectiveVoice,
             });
           }
         };

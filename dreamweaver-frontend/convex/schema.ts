@@ -635,6 +635,14 @@ export default defineSchema({
       v.literal("generated"),
       v.literal("cameo"),
     )),
+    // M6 — per-character TTS voice assignment. When set, the audio
+    // batch route picks this voice for shots where this character is
+    // the (only) detected speaker. Falls back to the batch's default
+    // voice for narration-only shots or shots with multiple speakers.
+    // Kept as a free-form string (not a validator-enforced literal)
+    // so producers can point at any OpenAI TTS voice without a schema
+    // migration; validation happens at the route boundary.
+    voice: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

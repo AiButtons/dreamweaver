@@ -84,6 +84,43 @@ export const publishIdentityPack = mutation({
   },
 });
 
+/**
+ * M6 — assign a TTS voice to an identity pack. Pass an empty string to
+ * clear the mapping (the audio batch falls back to its default voice
+ * when a character has no explicit voice assignment).
+ *
+ * The route enforces the canonical OpenAI TTS voice vocabulary
+ * (alloy / echo / fable / onyx / nova / shimmer), so we accept any
+ * string here and let the route reject bad values — keeps the schema
+ * migration-free when OpenAI adds new voices.
+ */
+export const setIdentityPackVoice = mutation({
+  args: {
+    storyboardId: v.id("storyboards"),
+    packId: v.string(),
+    voice: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await ensureStoryboardEditable(ctx, args.storyboardId, userId);
+    const pack = await ctx.db
+      .query("identityPacks")
+      .withIndex("by_storyboard_pack", (q) =>
+        q.eq("storyboardId", args.storyboardId).eq("packId", args.packId),
+      )
+      .unique();
+    if (!pack) {
+      throw new ConvexError("Identity pack not found");
+    }
+    const trimmed = args.voice.trim();
+    await ctx.db.patch(pack._id, {
+      voice: trimmed.length > 0 ? trimmed : undefined,
+      updatedAt: Date.now(),
+    });
+    return { packId: args.packId, voice: trimmed.length > 0 ? trimmed : null };
+  },
+});
+
 export const upsertGlobalConstraint = mutation({
   args: {
     storyboardId: v.id("storyboards"),

@@ -108,6 +108,9 @@ export function ProductionHubDrawer(props: {
     status: "acknowledged" | "resolved",
   ) => Promise<void>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  /** M6 — update the TTS voice assignment on an identity pack. Empty
+   *  string clears. */
+  onSetIdentityPackVoice?: (packId: string, voice: string) => Promise<void>;
 
   // Reference portraits (Enhancement #7). Optional so consumers that don't
   // need the portrait surface (e.g. legacy tests, headless tools) can
@@ -277,6 +280,7 @@ export function ProductionHubDrawer(props: {
                     onRunShotValidators={props.onRunShotValidators}
                     onResolveViolation={props.onResolveViolation}
                     onPublishIdentityPack={props.onPublishIdentityPack}
+                    onSetIdentityPackVoice={props.onSetIdentityPackVoice}
                     storyboardId={props.storyboardId}
                     identityPortraitCallbacks={props.identityPortraitCallbacks}
                   />

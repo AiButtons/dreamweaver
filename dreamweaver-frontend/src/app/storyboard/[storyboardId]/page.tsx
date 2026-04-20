@@ -468,6 +468,9 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
   );
   const resolveViolationMutation = useMutation(mutationRef("continuityOS:resolveViolation"));
   const publishIdentityPackMutation = useMutation(mutationRef("continuityOS:publishIdentityPack"));
+  const setIdentityPackVoiceMutation = useMutation(
+    mutationRef("continuityOS:setIdentityPackVoice"),
+  );
   const addIdentityPortraitMutation = useMutation(mutationRef("identityReferences:addIdentityPortrait"));
   const addCameoReferenceMutation = useMutation(mutationRef("identityReferences:addCameoReference"));
   // Short-lived upload URL for the cameo PNG blob (Convex storage).
@@ -1704,6 +1707,18 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
     [activeStoryboardId, publishIdentityPackMutation],
   );
 
+  const handleSetIdentityPackVoice = useCallback(
+    async (packId: string, voice: string) => {
+      if (!activeStoryboardId) return;
+      await setIdentityPackVoiceMutation({
+        storyboardId: activeStoryboardId,
+        packId,
+        voice,
+      });
+    },
+    [activeStoryboardId, setIdentityPackVoiceMutation],
+  );
+
   // Reference-portrait callbacks threaded into ContinuityOSPanel via the
   // ProductionHubDrawer. Memoized so the Identity tab doesn't remount its
   // query subscriptions on unrelated state changes.
@@ -2269,6 +2284,7 @@ function AppContent({ storyboardIdOverride }: StoryboardPageProps) {
               onRunShotValidators={handleRunShotValidators}
               onResolveViolation={handleResolveViolation}
               onPublishIdentityPack={handlePublishIdentityPack}
+              onSetIdentityPackVoice={handleSetIdentityPackVoice}
               identityPortraitCallbacks={identityPortraitCallbacks}
             />
           </div>

@@ -30,6 +30,9 @@ type ContinuityOSPanelProps = {
   onRunShotValidators?: () => Promise<void>;
   onResolveViolation?: (violationId: string, status: ViolationStatus) => Promise<void>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  /** M6 — update the per-character TTS voice assignment. Empty string
+   *  clears the assignment (audio batch falls back to its default). */
+  onSetIdentityPackVoice?: (packId: string, voice: string) => Promise<void>;
   // Portrait surface wiring (#7). Both need to be provided together for the
   // "Reference portraits" section to show its edit affordances; if either is
   // missing the section renders in read-only mode.
@@ -54,6 +57,7 @@ export function ContinuityOSPanel({
   onRunShotValidators,
   onResolveViolation,
   onPublishIdentityPack,
+  onSetIdentityPackVoice,
   storyboardId,
   identityPortraitCallbacks,
 }: ContinuityOSPanelProps) {
@@ -114,6 +118,7 @@ export function ContinuityOSPanel({
           <IdentityPacksView
             packs={identityPacks}
             onPublishIdentityPack={onPublishIdentityPack}
+            onSetIdentityPackVoice={onSetIdentityPackVoice}
             storyboardId={storyboardId}
             identityPortraitCallbacks={identityPortraitCallbacks}
           />
@@ -166,11 +171,13 @@ function TabButton({
 function IdentityPacksView({
   packs,
   onPublishIdentityPack,
+  onSetIdentityPackVoice,
   storyboardId,
   identityPortraitCallbacks,
 }: {
   packs: Array<Record<string, unknown>>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  onSetIdentityPackVoice?: (packId: string, voice: string) => Promise<void>;
   storyboardId?: string;
   identityPortraitCallbacks?: IdentityPortraitCallbacks;
 }) {
@@ -184,6 +191,7 @@ function IdentityPacksView({
           key={asString(pack.packId, `pack_${index}`)}
           pack={pack}
           onPublishIdentityPack={onPublishIdentityPack}
+          onSetIdentityPackVoice={onSetIdentityPackVoice}
           storyboardId={storyboardId}
           identityPortraitCallbacks={identityPortraitCallbacks}
         />
@@ -192,14 +200,28 @@ function IdentityPacksView({
   );
 }
 
+// M6 — canonical OpenAI TTS voice roster surfaced in the picker. Kept
+// in sync with `ALLOWED_VOICES` in /api/media/generate-audio/route.ts.
+const VOICE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "(default)" },
+  { value: "alloy", label: "alloy" },
+  { value: "echo", label: "echo" },
+  { value: "fable", label: "fable" },
+  { value: "onyx", label: "onyx" },
+  { value: "nova", label: "nova" },
+  { value: "shimmer", label: "shimmer" },
+];
+
 function IdentityPackRow({
   pack,
   onPublishIdentityPack,
+  onSetIdentityPackVoice,
   storyboardId,
   identityPortraitCallbacks,
 }: {
   pack: Record<string, unknown>;
   onPublishIdentityPack?: (packId: string, publish: boolean) => Promise<void>;
+  onSetIdentityPackVoice?: (packId: string, voice: string) => Promise<void>;
   storyboardId?: string;
   identityPortraitCallbacks?: IdentityPortraitCallbacks;
 }) {
@@ -210,10 +232,12 @@ function IdentityPackRow({
   const visibility = asString(pack.visibility, "project");
   const published = asBool(pack.published);
   const sourceCharacterId = asString(pack.sourceCharacterId);
+  const voice = asString(pack.voice);
   const dnaJson = asString(pack.dnaJson);
   const [expanded, setExpanded] = useState(false);
   const [portraitsExpanded, setPortraitsExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
 
   const dnaPreview = useMemo(() => {
     if (!dnaJson) return "";
@@ -234,6 +258,16 @@ function IdentityPackRow({
     }
   };
 
+  const handleVoiceChange = async (next: string) => {
+    if (!onSetIdentityPackVoice || !packId) return;
+    setVoiceBusy(true);
+    try {
+      await onSetIdentityPackVoice(packId, next);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
   return (
     <div className="rounded border border-zinc-800 p-2">
       <div className="flex items-start justify-between gap-2">
@@ -248,16 +282,38 @@ function IdentityPackRow({
             <p className="text-[11px] text-zinc-500 line-clamp-2">{description}</p>
           ) : null}
         </div>
-        {onPublishIdentityPack && packId ? (
-          <button
-            type="button"
-            className="shrink-0 rounded bg-zinc-800 px-2 py-1 text-[10px] disabled:opacity-40"
-            onClick={() => void togglePublished()}
-            disabled={busy}
-          >
-            {published ? "Unpublish" : "Publish"}
-          </button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {onSetIdentityPackVoice && packId ? (
+            <label
+              className="flex items-center gap-1 text-[10px] text-zinc-400"
+              title="OpenAI TTS voice the audio batch uses when this character is the detected speaker"
+            >
+              <span className="uppercase tracking-wide">Voice</span>
+              <select
+                value={voice}
+                onChange={(e) => void handleVoiceChange(e.target.value)}
+                disabled={voiceBusy}
+                className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-[10px] text-zinc-200 disabled:opacity-50"
+              >
+                {VOICE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {onPublishIdentityPack && packId ? (
+            <button
+              type="button"
+              className="rounded bg-zinc-800 px-2 py-1 text-[10px] disabled:opacity-40"
+              onClick={() => void togglePublished()}
+              disabled={busy}
+            >
+              {published ? "Unpublish" : "Publish"}
+            </button>
+          ) : null}
+        </div>
       </div>
       {dnaPreview ? (
         <button
